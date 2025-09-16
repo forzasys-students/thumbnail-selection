@@ -1,0 +1,7 @@
+name: SoccerNet
+channels:
+  - defaults
+dependencies:
+  - python
+  - pip
+prefix: C:\Users\roshi\miniconda3\envs\SoccerNet
