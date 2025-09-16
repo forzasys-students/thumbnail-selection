@@ -1,0 +1,15 @@
+# Virtual environments
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data (SoccerNet videos/images)
+data/
+*.mkv
+*.mp4
+*.npy
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
