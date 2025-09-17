@@ -13,3 +13,6 @@ data/
 
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# Models
+*.pt

@@ -16,15 +16,19 @@ def run_pipeline():
     data_path = "C:/Users/roshi/Desktop/MasterOppgave/data/SoccerNet"
     thumb_root = "C:/Users/roshi/Desktop/MasterOppgave/data/thumbnails"
 
-    # Try downloading (can be interrupted with Ctrl+C)
-    password = getpass("Enter your SoccerNet password: ")
-    downloader = SoccerNetDownloader(LocalDirectory=data_path)
-    downloader.password = password
+    # Check if the SoccerNet folder is empty
+    if not os.path.exists(data_path) or len(os.listdir(data_path)) == 0:
+        print("SoccerNet folder is empty. Downloading videos...")
+        password = getpass("Enter your SoccerNet password: ")
+        downloader = SoccerNetDownloader(LocalDirectory=data_path)
+        downloader.password = password
 
-    try:
-        downloader.downloadGames(files=["1_224p.mkv"], split=["valid"])
-    except KeyboardInterrupt:
-        print("Download cancelled by user. Proceeding with existing files...")
+        try:
+            downloader.downloadGames(files=["1_224p.mkv"], split=["valid"])
+        except KeyboardInterrupt:
+            print("Download cancelled by user. Proceeding with existing files...")
+    else:
+        print("SoccerNet folder already has data. Skipping download.")
 
     # Look for an already-downloaded video
     video_file = find_first_video(data_path)
