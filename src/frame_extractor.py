@@ -1,6 +1,8 @@
 import os
 import cv2
 from ultralytics import YOLO
+import subprocess
+
 
 # Load YOLO once (global)
 yolo_model = YOLO("yolov8n.pt")  # pretrained on COCO, class 0 = "person"
@@ -78,3 +80,60 @@ def extract_frames(video_file, out_dir, interval=100):
 
     cap.release()
     print(f"Extracted {saved_count} player-containing thumbnails to {out_dir}")
+
+
+
+# Mapping of labels to broader categories (not applied in current pipeline,
+# but useful if you want to collapse classes later).
+LABEL_MAP = {
+    "Main camera left": "Wide",
+    "Main camera center": "Wide",
+    "Main camera right": "Wide",
+    "Close-up player or field referee": "CloseUp",
+    "Close-up side staff": "CloseUp",
+    "Close-up behind the goal": "CloseUp",
+    "Bench": "Outer",
+    "Coach": "Outer",
+    "Public": "Outer",
+    "Replay": "Replay",
+    "Logo": "Replay",
+}
+
+
+def extract_frame(video_file, out_root, game_name, shot_id, frame_idx, label):
+    """
+    Extract a single frame from `video_file` at index `frame_idx`
+    and save it into:
+        out_root / game_name / <label> / <shot_id>_<frame_idx>.jpg
+
+    Args:
+        video_file (str): path to video (half .mkv)
+        out_root (str): base output directory
+        game_name (str): folder name for the current game
+        shot_id (str): identifier for the shot (e.g. "23_H1")
+        frame_idx (int): frame index to extract
+        label (str): annotation label, used as subfolder name
+
+    Returns:
+        out_path (str): path to the saved .jpg
+    """
+    cap = cv2.VideoCapture(video_file)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret or frame is None:
+        raise RuntimeError(f"Could not read frame {frame_idx} from {video_file}")
+
+    # Clean label for folder naming
+    safe_label = label.replace(" ", "_").replace("/", "_")
+
+    # Output directory structure: shot_frames/game/label/
+    out_dir = os.path.join(out_root, game_name, safe_label)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Write frame to disk
+    out_path = os.path.join(out_dir, f"{shot_id}_{frame_idx}.jpg")
+    cv2.imwrite(out_path, frame)
+    return out_path
+
