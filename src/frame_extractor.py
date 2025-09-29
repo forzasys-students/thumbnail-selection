@@ -48,8 +48,8 @@ def extract_frames_from_shot_seconds(
     start_sec: float,
     end_sec: float,
     label: str,
-    step_sec: float = 1.0,
-    edge_trim_sec: float = 0.5,
+    step_sec: float = 3.0,
+    edge_trim_sec: float = 1.0,
     blur_thresh: float = 200.0,
 ) -> list[str]:
     """
