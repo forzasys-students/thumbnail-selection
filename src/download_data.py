@@ -3,7 +3,7 @@ from getpass import getpass
 from SoccerNet.Downloader import SoccerNetDownloader, getListGames
 
 
-def download_data(data_path, split="train", max_games=5):
+def download_data(data_path, split="train", max_games=3):
     """
     Download SoccerNet data for a given split (train/valid/test).
 
@@ -34,4 +34,4 @@ def download_data(data_path, split="train", max_games=5):
 if __name__ == "__main__":
     data_path = "C:/Users/roshi/Desktop/MasterOppgave/data/SoccerNet"
     os.makedirs(data_path, exist_ok=True)
-    download_data(data_path, split="train", max_games=5)
+    download_data(data_path, split="train", max_games=3)
