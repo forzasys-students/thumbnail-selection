@@ -76,7 +76,8 @@ networkx==3.5
 notebook==7.4.5
 notebook_shim==0.2.4
 numpy==2.2.6
-opencv-python==4.12.0.88
+#opencv-python==4.12.0.88
+opencv-python-headless==4.12.0.88
 packaging==25.0
 pandocfilters==1.5.1
 parso==0.8.5

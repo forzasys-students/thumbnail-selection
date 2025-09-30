@@ -41,6 +41,7 @@ def run_pipeline():
 
             # Open once to know bounds (also sanity-check file is readable)
             cap = cv2.VideoCapture(video_file)
+            #cap = cv2.VideoCapture(video_file, cv2.CAP_FFMPEG)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
             cap.release()

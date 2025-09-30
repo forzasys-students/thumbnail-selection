@@ -66,6 +66,7 @@ def extract_frames_from_shot_seconds(
     if is_logo_label(label):
         return []
 
+    #cap = cv2.VideoCapture(video_file, cv2.CAP_FFMPEG)
     cap = cv2.VideoCapture(video_file)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open {video_file}")
