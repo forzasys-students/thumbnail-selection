@@ -6,7 +6,14 @@ from parse_labels import parse_camera_labels
 from frame_extractor import extract_frames_from_shot_seconds
 
 def find_all_games(data_path: str) -> list[str]:
-    """Return all game dirs that have both halves + Labels-cameras.json."""
+    """
+    Recursively search under `data_path` to find all valid game directories.
+
+    A directory is considered a "valid game" if it contains:
+        - Labels-cameras.json (the annotation file)
+        - 1_224p.mkv (first half video)
+        - 2_224p.mkv (second half video)
+    """
     game_dirs = []
     for root, _, files in os.walk(data_path):
         if "Labels-cameras.json" in files and "1_224p.mkv" in files and "2_224p.mkv" in files:
@@ -14,44 +21,69 @@ def find_all_games(data_path: str) -> list[str]:
     return game_dirs
 
 def run_pipeline():
+    """
+    End-to-end pipeline for frame extraction and metadata logging.
+
+    Steps:
+    1. Find all valid game directories.
+    2. For each game:
+        - Parse shot boundaries and labels from Labels-cameras.json.
+        - For each half (1st, 2nd):
+            - Load the corresponding video (1_224p.mkv or 2_224p.mkv).
+            - For each shot:
+                - Extract multiple representative frames using `frame_extractor`.
+                - Save frames in organized folders (by label).
+                - Track metadata: (game, half, label, frame_idx, file_path).
+                - Count label occurrences for later distribution analysis.
+    3. Write all metadata to metadata.csv.
+    4. Write label distribution to label_counts.csv.
+    """
+    
+    # --- Paths configuration ---
     data_root = "C:/Users/roshi/Desktop/MasterOppgave/data"
-    data_path = os.path.join(data_root, "SoccerNet")
-    out_root  = os.path.join(data_root, "frames")
+    data_path = os.path.join(data_root, "SoccerNet")   # Where raw games/videos are stored
+    out_root  = os.path.join(data_root, "frames")      # Where extracted frames are stored
+    
+    metadata_path = os.path.join(data_root, "metadata.csv")  # CSV for frame metadata
+    label_counts = Counter()      # Counter to keep track of how many frames per label
+    all_metadata = []             # Stores rows for metadata.csv
 
-    metadata_path = os.path.join(data_root, "metadata.csv")
-    label_counts = Counter()
-    all_metadata = []
 
+    # --- Find games ---
     games = find_all_games(data_path)
     if not games:
         raise FileNotFoundError("No games with videos + labels. Run download_data.py first.")
 
+    # --- Loop through games ---
     for game_dir in games:
         game_name = os.path.basename(game_dir)
         print(f"Processing game: {game_name}")
 
-        # Parse shot windows in seconds per half
+        # Parse shot segments (start_sec, end_sec, label) for each half
         label_file = os.path.join(game_dir, "Labels-cameras.json")
         shots_by_half = parse_camera_labels(label_file)
 
+        # Each game has 2 halves
         for half in [1, 2]:
             video_file = os.path.join(game_dir, f"{half}_224p.mkv")
             if not os.path.exists(video_file):
                 continue
 
-            # Open once to know bounds (also sanity-check file is readable)
+            # --- Sanity check: open video to confirm it's readable ---
             cap = cv2.VideoCapture(video_file)
             #cap = cv2.VideoCapture(video_file, cv2.CAP_FFMPEG)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0  # fallback if FPS is missing
             cap.release()
+
             if total_frames <= 0:
                 print(f"Skipping unreadable video: {video_file}")
                 continue
 
+            # --- Loop through shot annotations for this half ---
             for shot_id, (start_sec, end_sec, label) in enumerate(shots_by_half[half]):
-                # Call extractor (it will handle edge trim, logos, blur, bounds)
                 try:
+                    # Extract frames for this shot (handles skipping logos, trimming edges, skipping blurry frames)
                     saved = extract_frames_from_shot_seconds(
                         video_file=video_file,
                         out_root=out_root,
@@ -60,11 +92,13 @@ def run_pipeline():
                         start_sec=start_sec,
                         end_sec=end_sec,
                         label=label,
-                        step_sec=3.0,        # 1 frame per second
-                        edge_trim_sec=1.0,   # skip 0.5s at each shot edge
-                        blur_thresh=200.0,   # Laplacian var threshold
+                        step_sec=3.0,        # sample every 3 seconds
+                        edge_trim_sec=1.0,   # skip 1.0 s at each shot edge
+                        blur_thresh=200.0,   # Laplacian threshold for blurry frame detection
                     )
+                    # For each saved frame, add metadata + update label counts
                     for path in saved:
+                        # Extract numeric frame index from filename
                         frame_idx = os.path.splitext(os.path.basename(path))[0].split("_")[-1]
                         all_metadata.append([game_name, half, label, frame_idx, path])
                         label_counts[label] += 1

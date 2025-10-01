@@ -38,8 +38,7 @@ LABEL_MAP = {
 }
 
 
-# ---------- core ----------
-
+# ---------- Core extraction ----------
 def extract_frames_from_shot_seconds(
     video_file: str,
     out_root: str,
@@ -52,58 +51,74 @@ def extract_frames_from_shot_seconds(
     edge_trim_sec: float = 1.0,
     blur_thresh: float = 200.0,
 ) -> list[str]:
+    
     """
-    Extract multiple frames for one shot using second-based boundaries.
+    Extract frames from a single shot segment in a video.
 
-    - Uses start_sec/end_sec (seconds from the half start)
-    - Skips first and last `edge_trim_sec`
-    - Samples every `step_sec` seconds
-    - Skips 'Logo' shots
-    - Drops blurry frames via Laplacian variance
+    Process:
+    --------
+    1. Open the video file with OpenCV.
+    2. Convert shot boundaries (start_sec, end_sec) into frame indices.
+       - Apply `edge_trim_sec` to skip edges (avoid transition frames).
+       - Clamp indices to video duration.
+    3. Sample frames every `step_sec` seconds.
+    4. Skip blurry frames (using variance of Laplacian).
+    5. Save frames into per-label directories.
 
     Returns a list of saved file paths.
     """
+
+    # Skip "Logo" shots completely
     if is_logo_label(label):
         return []
 
+    # Open video
     #cap = cv2.VideoCapture(video_file, cv2.CAP_FFMPEG)
     cap = cv2.VideoCapture(video_file)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open {video_file}")
 
+    # Get FPS (frames per second)
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
-        fps = 25.0  # SoccerNet halves are 25fps; fallback if reader lies
+        fps = 25.0  # SoccerNet videos are ~25fps; fallback
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    # Trim edges to avoid cut artifacts
+    # Convert start/end times (in seconds) to frame indices
     start_f = int((start_sec + edge_trim_sec) * fps)
     end_f   = int((end_sec   - edge_trim_sec) * fps)
 
-    # Clamp to video bounds
+    # Ensure within video bounds
     start_f = max(0, min(start_f, total_frames - 1))
     end_f   = max(0, min(end_f,   total_frames - 1))
 
+    # Edge case: invalid range
     if end_f <= start_f:
         cap.release()
         return []
 
+    # Step size in frames (e.g., 3 sec * fps = ~75 frames apart)
     step = max(1, int(step_sec * fps))
 
-    # Output dir: raw JSON label (no grouping)
+    # Create output directory for this label
     label_dir = os.path.join(out_root, game_name, safe_label(label))
     os.makedirs(label_dir, exist_ok=True)
 
     saved = []
+
+    # Iterate through frames in the shot
     for fidx in range(start_f, end_f, step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)   # Seek to frame index
         ok, frame = cap.read()
         if not ok or frame is None:
             continue
+        
+        # Skip blurry frames
         if is_blurry(frame, thresh=blur_thresh):
             continue
 
+        # Save frame
         out_path = os.path.join(label_dir, f"{shot_id}_{fidx}.jpg")
         cv2.imwrite(out_path, frame)
         saved.append(out_path)
