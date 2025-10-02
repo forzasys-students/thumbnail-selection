@@ -1,127 +1,135 @@
 import os
 import cv2
-from ultralytics import YOLO
-import subprocess
-
-# ---------- helpers ----------
-
-def is_blurry(frame, thresh=200.0) -> bool:
-    """Return True if the frame is blurry (variance of Laplacian below threshold)."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    fm = cv2.Laplacian(gray, cv2.CV_64F).var()
-    return fm < thresh
-
-def is_logo_label(label: str) -> bool:
-    """Return True if this shot label is a 'Logo' shot (skip entirely)."""
-    return label.strip().lower() == "logo"
+from typing import List
 
 def safe_label(label: str) -> str:
-    """Filesystem-safe label folder name (raw JSON label, not grouped)."""
+    """
+    Convert a raw label (e.g. "Main camera center") into a safe folder name.
+    This way, labels can be used as folder names on all systems.
+    """
     return label.replace(" ", "_").replace("/", "_")
 
+def is_blurry(frame, threshold: float = 200.0) -> bool:
+    """
+    Check if a frame is blurry using the Laplacian variance method.
+    If variance < threshold → frame considered blurry.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    variance = cv2.Laplacian(gray, cv2.CV_64F).var()
+    return variance < threshold
 
+def choose_sample_times(start_seconds: float, end_seconds: float) -> List[float]:
+    """
+    Decide which timestamps (in seconds) to sample frames from a shot window.
 
-# Mapping of labels to broader categories (not applied in current pipeline,
-# but useful if you want to collapse classes later).
-LABEL_MAP = {
-    "Main camera left": "Wide",
-    "Main camera center": "Wide",
-    "Main camera right": "Wide",
-    "Close-up player or field referee": "CloseUp",
-    "Close-up side staff": "CloseUp",
-    "Close-up behind the goal": "CloseUp",
-    "Bench": "Outer",
-    "Coach": "Outer",
-    "Public": "Outer",
-    "Replay": "Replay",
-    "Logo": "Replay",
-}
+    Adaptive strategy:
+    - Very short shot (< 3s): 1 frame at midpoint
+    - Short shot (3–10s): 2 frames, at 1/3 and 2/3
+    - Medium shot (10–30s): 3 frames, at 1/4, 1/2, 3/4
+    - Long shot (> 30s): sample every 5s, maximum 10 frames
+    """
+    duration = max(0.0, end_seconds - start_seconds)
+    if duration <= 0:
+        return []
 
+    if duration < 3.0:
+        return [start_seconds + 0.5 * duration]
+    if duration < 10.0:
+        return [start_seconds + duration / 3.0, start_seconds + 2.0 * duration / 3.0]
+    if duration < 30.0:
+        return [
+            start_seconds + 0.25 * duration,
+            start_seconds + 0.5 * duration,
+            start_seconds + 0.75 * duration,
+        ]
 
-# ---------- Core extraction ----------
-def extract_frames_from_shot_seconds(
+    # Long segment: every 5 seconds, capped at 10 samples
+    step = 5.0
+    times = [start_seconds + i * step for i in range(int(duration // step) + 1)]
+    return times[:10]
+
+def extract_adaptive_frames(
     video_file: str,
     out_root: str,
     game_name: str,
     shot_id: str,
-    start_sec: float,
-    end_sec: float,
+    start_seconds: float,
+    end_seconds: float,
     label: str,
-    step_sec: float = 3.0,
-    edge_trim_sec: float = 1.0,
-    blur_thresh: float = 200.0,
-) -> list[str]:
-    
+    blur_threshold: float = 200.0,
+    ensure_one: bool = True
+) -> List[str]:
     """
-    Extract frames from a single shot segment in a video.
+    Extract frames from a video for one shot.
 
-    Process:
-    --------
+    Steps:
     1. Open the video file with OpenCV.
-    2. Convert shot boundaries (start_sec, end_sec) into frame indices.
-       - Apply `edge_trim_sec` to skip edges (avoid transition frames).
-       - Clamp indices to video duration.
-    3. Sample frames every `step_sec` seconds.
-    4. Skip blurry frames (using variance of Laplacian).
-    5. Save frames into per-label directories.
+    2. Clamp start/end times to video duration (avoid going out of range).
+    3. Pick sample times adaptively based on shot length.
+    4. Convert times to frame indices (fps * seconds).
+    5. For each candidate frame:
+       - Seek to frame
+       - Read it
+       - Skip if unreadable or blurry
+       - Save to folder named by label
+    6. If no frame was saved and ensure_one=True:
+       - Always save one frame at the midpoint of the shot (fallback).
 
-    Returns a list of saved file paths.
+    Returns:
+        List of file paths for the saved frames.
     """
 
-    # Skip "Logo" shots completely
-    if is_logo_label(label):
-        return []
-
-    # Open video
-    #cap = cv2.VideoCapture(video_file, cv2.CAP_FFMPEG)
+    # Open video file
     cap = cv2.VideoCapture(video_file)
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open {video_file}")
+        raise RuntimeError(f"Could not open video: {video_file}")
 
-    # Get FPS (frames per second)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps <= 0:
-        fps = 25.0  # SoccerNet videos are ~25fps; fallback
-
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0  # fallback to 25 if fps not found
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else 0.0
 
-    # Convert start/end times (in seconds) to frame indices
-    start_f = int((start_sec + edge_trim_sec) * fps)
-    end_f   = int((end_sec   - edge_trim_sec) * fps)
-
-    # Ensure within video bounds
-    start_f = max(0, min(start_f, total_frames - 1))
-    end_f   = max(0, min(end_f,   total_frames - 1))
-
-    # Edge case: invalid range
-    if end_f <= start_f:
+    # Clamp times to actual video length 
+    start = max(0.0, min(start_seconds, duration))
+    end   = max(0.0, min(end_seconds, duration))
+    if end <= start:
         cap.release()
         return []
 
-    # Step size in frames (e.g., 3 sec * fps = ~75 frames apart)
-    step = max(1, int(step_sec * fps))
+    # Pick sample times and convert to frame indices
+    sample_seconds = choose_sample_times(start, end)
+    candidate_frames = sorted({int(sec * fps) for sec in sample_seconds if 0 <= sec < duration})
 
-    # Create output directory for this label
-    label_dir = os.path.join(out_root, game_name, safe_label(label))
-    os.makedirs(label_dir, exist_ok=True)
+    # Prepare output folder 
+    label_folder = os.path.join(out_root, game_name, safe_label(label))
+    os.makedirs(label_folder, exist_ok=True)
 
-    saved = []
+    saved_paths: List[str] = []
 
-    # Iterate through frames in the shot
-    for fidx in range(start_f, end_f, step):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)   # Seek to frame index
+    # Loop through candidate frame indices
+    for frame_index in candidate_frames:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         ok, frame = cap.read()
         if not ok or frame is None:
-            continue
-        
-        # Skip blurry frames
-        if is_blurry(frame, thresh=blur_thresh):
-            continue
+            continue  # skip if frame not readable
 
-        # Save frame
-        out_path = os.path.join(label_dir, f"{shot_id}_{fidx}.jpg")
+        if is_blurry(frame, blur_threshold):
+            continue  # skip blurry frames
+
+        # Save frame as image file
+        out_path = os.path.join(label_folder, f"{shot_id}_{frame_index}.jpg")
         cv2.imwrite(out_path, frame)
-        saved.append(out_path)
+        saved_paths.append(out_path)
+
+    # Ensure at least one frame is saved 
+    if ensure_one and not saved_paths:
+        midpoint = int(((start + end) / 2.0) * fps)
+        if 0 <= midpoint < total_frames:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, midpoint)
+            ok, frame = cap.read()
+            if ok and frame is not None:
+                out_path = os.path.join(label_folder, f"{shot_id}_{midpoint}.jpg")
+                cv2.imwrite(out_path, frame)
+                saved_paths.append(out_path)
 
     cap.release()
-    return saved
+    return saved_paths
