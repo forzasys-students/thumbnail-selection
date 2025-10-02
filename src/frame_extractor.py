@@ -18,35 +18,51 @@ def is_blurry(frame, threshold: float = 200.0) -> bool:
     variance = cv2.Laplacian(gray, cv2.CV_64F).var()
     return variance < threshold
 
-def choose_sample_times(start_seconds: float, end_seconds: float) -> List[float]:
-    """
-    Decide which timestamps (in seconds) to sample frames from a shot window.
 
-    Adaptive strategy:
-    - Very short shot (< 3s): 1 frame at midpoint
-    - Short shot (3–10s): 2 frames, at 1/3 and 2/3
-    - Medium shot (10–30s): 3 frames, at 1/4, 1/2, 3/4
-    - Long shot (> 30s): sample every 5s, maximum 10 frames
+def choose_sample_times_weighted(start_seconds: float, end_seconds: float, sample_factor: float) -> List[float]:
+    """
+    Decide which timestamps to sample frames from inside a shot.
+
+    - sample_factor > 1.0 = denser sampling (take more frames).
+    - sample_factor < 1.0 = sparser sampling (take fewer frames).
+
+    Rules:
+      - Shots <3s: normally 1 frame → round(1*factor).
+      - Shots 3–10s: normally 2 frames → round(2*factor).
+      - Shots 10–30s: normally 3 frames → round(3*factor).
+      - Shots >30s: take frames every ~5s, but shrink/grow step size by factor.
     """
     duration = max(0.0, end_seconds - start_seconds)
     if duration <= 0:
         return []
 
-    if duration < 3.0:
-        return [start_seconds + 0.5 * duration]
-    if duration < 10.0:
-        return [start_seconds + duration / 3.0, start_seconds + 2.0 * duration / 3.0]
-    if duration < 30.0:
-        return [
-            start_seconds + 0.25 * duration,
-            start_seconds + 0.5 * duration,
-            start_seconds + 0.75 * duration,
-        ]
+    factor = max(0.1, float(sample_factor))  # safety: no zero or negative
 
-    # Long segment: every 5 seconds, capped at 10 samples
-    step = 5.0
+    # Very short shots (<3s): usually just 1 frame
+    if duration < 3.0:
+        count = max(1, round(1 * factor))
+        if count == 1:
+            return [start_seconds + 0.5 * duration]  # middle of shot
+        # evenly spread multiple frames across the interval
+        return [start_seconds + (i+1) * (duration / (count + 1)) for i in range(count)]
+
+    # Short shots (3–10s): normally 2 frames → scale by factor
+    if duration < 10.0:
+        count = max(1, round(2 * factor))
+        return [start_seconds + (i+1) * (duration / (count + 1)) for i in range(count)]
+
+    # Medium shots (10–30s): normally 3 frames → scale by factor
+    if duration < 30.0:
+        count = max(1, round(3 * factor))
+        return [start_seconds + (i+1) * (duration / (count + 1)) for i in range(count)]
+
+    # Long shots (>30s): sample every ~5s, but adjust by factor
+    step = 5.0 / factor
+    step = max(0.5, step)  # don’t make step ridiculously small
+    cap = max(1, int(round(10 * factor)))  # at most ~10*factor frames
     times = [start_seconds + i * step for i in range(int(duration // step) + 1)]
-    return times[:10]
+    return times[:cap]    
+
 
 def extract_adaptive_frames(
     video_file: str,
@@ -57,7 +73,8 @@ def extract_adaptive_frames(
     end_seconds: float,
     label: str,
     blur_threshold: float = 200.0,
-    ensure_one: bool = True
+    ensure_one: bool = True,
+    sample_factor: float = 1.0
 ) -> List[str]:
     """
     Extract frames from a video for one shot.
@@ -94,9 +111,9 @@ def extract_adaptive_frames(
     if end <= start:
         cap.release()
         return []
-
-    # Pick sample times and convert to frame indices
-    sample_seconds = choose_sample_times(start, end)
+    
+    # Pick sample times (weighted by label factor) and convert to frame indices
+    sample_seconds = choose_sample_times_weighted(start, end, sample_factor)
     candidate_frames = sorted({int(sec * fps) for sec in sample_seconds if 0 <= sec < duration})
 
     # Prepare output folder 
