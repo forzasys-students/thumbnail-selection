@@ -51,20 +51,24 @@ def run_pipeline():
     metadata_csv   = os.path.join(out_root, "metadata.csv")
     global_label_counts_csv = os.path.join(out_root, "label_counts.csv")
 
+
+    # Toggle: True = weighted factors, False = raw extraction
+    USE_SAMPLE_FACTORS = True
+
     # Per-label sampling weights
     label_sample_factor = {
-        "Main camera center": 0.4,
-        "Close-up player or field referee": 0.5,
-        "Close-up side staff": 1.5,
-        "Close-up behind the goal": 1.8,
-        "Main camera left": 2.5,
-        "Main camera right": 2.5,
-        "Close-up corner": 3.0,
-        "Public": 3.0,
-        "Main behind the goal": 4.0,
-        "Goal line technology camera": 6.0,
-        "Spider camera": 6.0,
-        "Other": 6.0,
+        "Main camera center": 0.2,
+        "Close-up player or field referee": 0.1,
+        "Close-up side staff": 3.0,
+        "Close-up behind the goal": 5.0,
+        "Main camera left": 5.0,
+        "Main camera right": 5.0,
+        "Close-up corner": 12.0,
+        "Public": 15.0,
+        "Main behind the goal": 6.0,
+        "Goal line technology camera": 25.0,
+        "Spider camera": 25.0,
+        "Other": 10.0,
     }
 
     # Find all games
@@ -101,6 +105,13 @@ def run_pipeline():
 
             for shot_index, (start_seconds, end_seconds, label) in enumerate(shots_by_half[half]):
                 try:
+                    
+                    # Choose factor based on mode
+                    factor = 1.0
+                    if USE_SAMPLE_FACTORS:
+                        factor = label_sample_factor.get(label, 1.0)
+
+                    # Extract frames
                     saved_paths = extract_adaptive_frames(
                         video_file=video_file,
                         out_root=out_root,
@@ -109,8 +120,10 @@ def run_pipeline():
                         start_seconds=start_seconds,
                         end_seconds=end_seconds,
                         label=label,
-                        sample_factor=label_sample_factor.get(label, 1.0)  
+                        sample_factor=factor
                     )
+
+                    # Collect metadata + update counters
                     for path in saved_paths:
                         frame_idx = os.path.splitext(os.path.basename(path))[0].split("_")[-1]
                         all_metadata.append([game_name, half, label, frame_idx, path])
