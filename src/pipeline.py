@@ -65,9 +65,9 @@ def run_pipeline():
         "Main camera right": 5.0,
         "Close-up corner": 12.0,
         "Public": 15.0,
-        "Main behind the goal": 6.0,
+        "Main behind the goal": 4.0,
         "Goal line technology camera": 25.0,
-        "Spider camera": 25.0,
+        "Spider camera": 8.0,
         "Other": 10.0,
     }
 
