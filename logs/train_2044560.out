@@ -1,0 +1,121 @@
+Starting job 2044560 on gpu-11 on Fox at Tue Oct 14 13:43:46 CEST 2025
+
+Python path: /fp/homes01/u01/ec-aliaana/.conda/envs/SoccerNet311/bin/python
+CUDA available?
+True NVIDIA GeForce RTX 3090
+Training on cuda for 5 epochs | 12 classes | 11471 samples
+[Epoch 1/5] Batch 0 Loss: 2.8229
+[Epoch 1/5] Batch 20 Loss: 1.2509
+[Epoch 1/5] Batch 40 Loss: 0.8600
+[Epoch 1/5] Batch 60 Loss: 0.7525
+[Epoch 1/5] Batch 80 Loss: 0.8537
+[Epoch 1/5] Batch 100 Loss: 0.9068
+[Epoch 1/5] Batch 120 Loss: 0.7735
+[Epoch 1/5] Batch 140 Loss: 0.3943
+[Epoch 1/5] Batch 160 Loss: 0.2836
+[Epoch 1/5] Batch 180 Loss: 0.3327
+[Epoch 1/5] Batch 200 Loss: 0.1887
+[Epoch 1/5] Batch 220 Loss: 0.3111
+[Epoch 1/5] Batch 240 Loss: 0.3048
+[Epoch 1/5] Batch 260 Loss: 0.3635
+[Epoch 1/5] Batch 280 Loss: 0.3236
+Epoch 1/5 done in 20.2s
+  Train Loss: 0.6013 | Val Loss: 0.2897 | Val Acc: 91.72%
+  ✅ Saved checkpoint: checkpoints/resnet18_epoch1.pt
+[Epoch 2/5] Batch 0 Loss: 0.1370
+[Epoch 2/5] Batch 20 Loss: 0.0367
+[Epoch 2/5] Batch 40 Loss: 0.0925
+[Epoch 2/5] Batch 60 Loss: 0.1936
+[Epoch 2/5] Batch 80 Loss: 0.1067
+[Epoch 2/5] Batch 100 Loss: 0.1583
+[Epoch 2/5] Batch 120 Loss: 0.0629
+[Epoch 2/5] Batch 140 Loss: 0.2821
+[Epoch 2/5] Batch 160 Loss: 0.1070
+[Epoch 2/5] Batch 180 Loss: 0.0694
+[Epoch 2/5] Batch 200 Loss: 0.0962
+[Epoch 2/5] Batch 220 Loss: 0.0936
+[Epoch 2/5] Batch 240 Loss: 0.1431
+[Epoch 2/5] Batch 260 Loss: 0.1056
+[Epoch 2/5] Batch 280 Loss: 0.0602
+Epoch 2/5 done in 11.2s
+  Train Loss: 0.1466 | Val Loss: 0.2280 | Val Acc: 93.98%
+  ✅ Saved checkpoint: checkpoints/resnet18_epoch2.pt
+[Epoch 3/5] Batch 0 Loss: 0.0845
+[Epoch 3/5] Batch 20 Loss: 0.1205
+[Epoch 3/5] Batch 40 Loss: 0.0397
+[Epoch 3/5] Batch 60 Loss: 0.0172
+[Epoch 3/5] Batch 80 Loss: 0.0553
+[Epoch 3/5] Batch 100 Loss: 0.0443
+[Epoch 3/5] Batch 120 Loss: 0.1605
+[Epoch 3/5] Batch 140 Loss: 0.0469
+[Epoch 3/5] Batch 160 Loss: 0.1099
+[Epoch 3/5] Batch 180 Loss: 0.0413
+[Epoch 3/5] Batch 200 Loss: 0.0258
+[Epoch 3/5] Batch 220 Loss: 0.0207
+[Epoch 3/5] Batch 240 Loss: 0.0208
+[Epoch 3/5] Batch 260 Loss: 0.0186
+[Epoch 3/5] Batch 280 Loss: 0.0072
+Epoch 3/5 done in 11.3s
+  Train Loss: 0.0555 | Val Loss: 0.2618 | Val Acc: 93.03%
+  ✅ Saved checkpoint: checkpoints/resnet18_epoch3.pt
+[Epoch 4/5] Batch 0 Loss: 0.0073
+[Epoch 4/5] Batch 20 Loss: 0.0102
+[Epoch 4/5] Batch 40 Loss: 0.0057
+[Epoch 4/5] Batch 60 Loss: 0.0541
+[Epoch 4/5] Batch 80 Loss: 0.0057
+[Epoch 4/5] Batch 100 Loss: 0.0284
+[Epoch 4/5] Batch 120 Loss: 0.0118
+[Epoch 4/5] Batch 140 Loss: 0.0070
+[Epoch 4/5] Batch 160 Loss: 0.0129
+[Epoch 4/5] Batch 180 Loss: 0.0159
+[Epoch 4/5] Batch 200 Loss: 0.0080
+[Epoch 4/5] Batch 220 Loss: 0.0160
+[Epoch 4/5] Batch 240 Loss: 0.0128
+[Epoch 4/5] Batch 260 Loss: 0.0290
+[Epoch 4/5] Batch 280 Loss: 0.0162
+Epoch 4/5 done in 11.4s
+  Train Loss: 0.0223 | Val Loss: 0.2623 | Val Acc: 93.64%
+  ✅ Saved checkpoint: checkpoints/resnet18_epoch4.pt
+[Epoch 5/5] Batch 0 Loss: 0.0741
+[Epoch 5/5] Batch 20 Loss: 0.0126
+[Epoch 5/5] Batch 40 Loss: 0.0120
+[Epoch 5/5] Batch 60 Loss: 0.0020
+[Epoch 5/5] Batch 80 Loss: 0.0079
+[Epoch 5/5] Batch 100 Loss: 0.0172
+[Epoch 5/5] Batch 120 Loss: 0.0149
+[Epoch 5/5] Batch 140 Loss: 0.0515
+[Epoch 5/5] Batch 160 Loss: 0.0161
+[Epoch 5/5] Batch 180 Loss: 0.0096
+[Epoch 5/5] Batch 200 Loss: 0.0178
+[Epoch 5/5] Batch 220 Loss: 0.0093
+[Epoch 5/5] Batch 240 Loss: 0.0053
+[Epoch 5/5] Batch 260 Loss: 0.0058
+[Epoch 5/5] Batch 280 Loss: 0.0162
+Epoch 5/5 done in 11.3s
+  Train Loss: 0.0193 | Val Loss: 0.2641 | Val Acc: 94.51%
+  ✅ Saved checkpoint: checkpoints/resnet18_epoch5.pt
+Training complete.
+
+Job 2044560 consumed 0.4 billing hours from project ec12.
+
+Submitted 2025-10-14T13:43:45; waited 1.0 seconds in the queue after becoming eligible to run.
+
+Requested wallclock time: 4.0 hours
+Elapsed wallclock time:   1.4 minutes
+
+Job exited normally.
+
+Task and CPU statistics:
+ID             CPUs  Tasks  CPU util                Start  Elapsed  Exit status
+2044560           4            0.0 %  2025-10-14T13:43:46   84.0 s  0
+2044560.batch     4      1    61.0 %  2025-10-14T13:43:46   84.0 s  0
+
+Used CPU time:   3.4 CPU minutes
+Unused CPU time: 2.2 CPU minutes
+
+Memory statistics, in GiB:
+ID              Alloc   Usage
+2044560          32.0        
+2044560.batch    32.0     1.5
+
+Job 2044560 completed at Tue Oct 14 13:45:10 CEST 2025
