@@ -23,4 +23,5 @@ echo "CUDA available?"
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
 cd ~/thumbnail-selection
-python train.py
+python train.py "$@"
+

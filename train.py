@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,32 +10,61 @@ from torchvision import transforms, models
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 from dataset import FrameDataset
 
-def main():
-    # Paths
-    data_root = "/fp/homes01/u01/ec-aliaana/data/frames_global"
-    csv_file = os.path.join(data_root, "metadata.csv") 
+def get_model(model_name: str, num_classes: int):
+    """Return a model architecture based on name."""
+    model_name = model_name.lower()
 
-    # Training config
-    num_epochs = 5
-    batch_size = 32
-    learning_rate = 1e-4
+    if model_name == "resnet18":
+        model = models.resnet18(weights="IMAGENET1K_V1")
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    elif model_name == "resnet50":
+        model = models.resnet50(weights="IMAGENET1K_V1")
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    elif model_name == "vit":
+        model = models.vit_b_16(weights="IMAGENET1K_V1")
+        model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
+    elif model_name == "r3d":
+        model = models.video.r3d_18(weights="KINETICS400_V1")
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+
+    return model
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, default="resnet18",
+                        choices=["resnet18", "resnet50", "vit", "r3d"])
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--data_root", type=str,
+                        default="/fp/homes01/u01/ec-aliaana/data/frames_global")
+    parser.add_argument("--csv_file", type=str, default="metadata.csv")
+    args = parser.parse_args()
+
+    # Setup
+    data_root = args.data_root
+    csv_file = os.path.join(data_root, args.csv_file)
+    num_epochs = args.epochs
+    batch_size = args.batch_size
+    learning_rate = args.lr
+    model_name = args.model
 
     # Transforms
     transform = transforms.Compose([
-    #transforms.RandomHorizontalFlip(p=0.5),
-    #transforms.RandomRotation(degrees=10),
-    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                         std=[0.229, 0.224, 0.225]),
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
     ])
 
-
-    # Dataset + splits
+    # Dataset
     dataset = FrameDataset(csv_file=csv_file, root_dir=data_root, transform=transform)
     num_classes = len(dataset.label_map)
 
+    # Split dataset
     train_size = int(0.8 * len(dataset))
     val_size = int(0.1 * len(dataset))
     test_size = len(dataset) - train_size - val_size
@@ -45,21 +75,22 @@ def main():
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=4)
 
     # Model
-    model = models.resnet18(weights="IMAGENET1K_V1")
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
-
+    model = get_model(model_name, num_classes)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    # Loss & Optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    # Output dirs
     os.makedirs("checkpoints", exist_ok=True)
 
-    print(f"Training on {device} for {num_epochs} epochs | {num_classes} classes | {len(dataset)} samples")
+    print(f"Training {model_name.upper()} on {device} for {num_epochs} epochs "
+          f"| {num_classes} classes | {len(dataset)} samples")
 
+    best_val_acc = 0.0
+    best_model_path = f"checkpoints/{model_name}_best.pt"
+
+    # Training loop
     for epoch in range(num_epochs):
         start_time = time.time()
         model.train()
@@ -72,7 +103,6 @@ def main():
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-
             running_loss += loss.item()
             if i % 20 == 0:
                 print(f"[Epoch {epoch+1}/{num_epochs}] Batch {i} Loss: {loss.item():.4f}")
@@ -88,7 +118,6 @@ def main():
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 val_loss += loss.item()
-
                 _, preds = torch.max(outputs, 1)
                 total += labels.size(0)
                 correct += (preds == labels).sum().item()
@@ -99,15 +128,17 @@ def main():
         print(f"Epoch {epoch+1}/{num_epochs} done in {time.time() - start_time:.1f}s")
         print(f"  Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} | Val Acc: {val_acc:.2f}%")
 
-        # Save checkpoint 
-        checkpoint_path = f"checkpoints/resnet18_epoch{epoch+1}.pt"
-        torch.save(model.state_dict(), checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}")
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), best_model_path)
+            print(f"Saved new best model: {best_model_path}")
 
     print("Training complete.")
 
-    # Final test evaluation
+    # Final test evaluation 
     print("\nRunning final test evaluation...")
+    model.load_state_dict(torch.load(best_model_path))
     model.eval()
     test_loss, correct, total = 0.0, 0, 0
     with torch.no_grad():
@@ -123,6 +154,7 @@ def main():
     avg_test_loss = test_loss / len(test_loader)
     test_acc = 100 * correct / total
     print(f"[TEST] Loss: {avg_test_loss:.4f}, Accuracy: {test_acc:.2f}%")
+    print(f"Best validation accuracy was {best_val_acc:.2f}% (saved at {best_model_path})")
 
 
 if __name__ == "__main__":
