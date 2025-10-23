@@ -62,6 +62,7 @@ def main():
 
     # Dataset
     dataset = FrameDataset(csv_file=csv_file, root_dir=data_root, transform=transform)
+    print("Training label map:", dataset.label_map)
     num_classes = len(dataset.label_map)
 
     # Split dataset
