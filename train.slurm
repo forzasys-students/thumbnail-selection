@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=soccernet-train
 #SBATCH --account=ec12
-#SBATCH --partition=accel            # or accel_long if you have longer jobs
-#SBATCH --gres=gpu:1
+#SBATCH --partition=accel
+#SBATCH --gpus=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
@@ -19,9 +19,7 @@ source $(conda info --base)/etc/profile.d/conda.sh
 conda activate SoccerNet311
 
 echo "Python path: $(which python)"
-echo "CUDA available?"
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+python -c "import torch; print('CUDA available?', torch.cuda.is_available(), '| Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
 
 cd ~/thumbnail-selection
 python train.py "$@"
-

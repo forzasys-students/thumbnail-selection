@@ -44,7 +44,6 @@ def get_model(model_name, num_classes, weights_path):
     return model
 
 
-# -------------------------------------------------------
 # CUSTOM DATASET
 class ImageFolderDataset(torch.utils.data.Dataset):
     """
@@ -95,7 +94,6 @@ class ImageFolderDataset(torch.utils.data.Dataset):
         return image, label
 
 
-# -------------------------------------------------------
 # MAIN EVALUATION PIPELINE
 def main():
     parser = argparse.ArgumentParser(description="Evaluate model on unique test set.")
