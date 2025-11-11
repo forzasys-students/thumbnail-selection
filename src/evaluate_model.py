@@ -22,27 +22,40 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from PIL import Image
 
-
 def get_model(model_name, num_classes, weights_path):
     model_name = model_name.lower()
 
     if model_name == "resnet18":
         model = models.resnet18(weights=None)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
+
     elif model_name == "resnet50":
         model = models.resnet50(weights=None)
         model.fc = nn.Linear(model.fc.in_features, num_classes)
+
     elif model_name == "vit":
         model = models.vit_b_16(weights=None)
         model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
+
+    elif model_name == "convnext":
+        model = models.convnext_base(weights=None)
+        model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
+
+    elif model_name == "efficientnet":
+        model = models.efficientnet_b3(weights=None)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
+
+    elif model_name == "yoloclass":
+        from ultralytics import YOLO
+        model = YOLO("yolov8n-cls.pt")
+        model.model[-1] = nn.Linear(model.model[-1].in_features, num_classes)
+
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
     state_dict = torch.load(weights_path, map_location="cpu")
     model.load_state_dict(state_dict, strict=True)
-
     return model
-
 
 # CUSTOM DATASET
 class ImageFolderDataset(torch.utils.data.Dataset):
