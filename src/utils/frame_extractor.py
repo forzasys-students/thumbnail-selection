@@ -2,6 +2,7 @@ import os
 import cv2
 from typing import List
 
+
 def safe_label(label: str) -> str:
     """
     Convert a raw label (e.g. "Main camera center") into a safe folder name.
@@ -150,3 +151,83 @@ def extract_adaptive_frames(
 
     cap.release()
     return saved_paths
+
+
+def extract_frames_from_clip(video_path, output_dir, fps_target=1):
+    """
+    Extract frames from a single video clip at a fixed temporal rate.
+    Args:
+        video_path (str): path to the video (mp4, mkv, etc.)
+        output_dir (str): directory to save frames
+        fps_target (int): frames per second to save (1 = one frame per second)
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+
+    fps_video = cap.get(cv2.CAP_PROP_FPS)
+    if fps_video <= 0:
+        fps_video = 25  # fallback if FPS not detected
+    frame_interval = int(round(fps_video / fps_target))
+
+    idx = 0
+    saved = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if idx % frame_interval == 0:
+            frame_path = os.path.join(output_dir, f"frame_{idx:05d}.jpg")
+            cv2.imwrite(frame_path, frame)
+            saved += 1
+        idx += 1
+
+    cap.release()
+    print(f"[INFO] Extracted {saved} frames (~{fps_target} FPS) from {video_path} → {output_dir}")
+
+
+if __name__ == "__main__":
+    import argparse
+    import os
+
+    parser = argparse.ArgumentParser(description="Extract frames from single or multiple videos.")
+    parser.add_argument("--input_path", required=True,
+                        help="Path to a single video file or folder containing multiple game clips.")
+    parser.add_argument("--output_dir", required=True,
+                        help="Output directory where frames are saved (subfolders per game).")
+    parser.add_argument("--fps", type=int, default=1,
+                        help="Target FPS for frame extraction (default: 1).")
+    args = parser.parse_args()
+
+    input_path = args.input_path
+    output_root = args.output_dir
+    os.makedirs(output_root, exist_ok=True)
+
+    # Gather video files (both MKV and MP4)
+    video_files = []
+    if os.path.isfile(input_path):
+        video_files = [input_path]
+    else:
+        for root, _, files in os.walk(input_path):
+            for f in files:
+                if f.lower().endswith((".mkv", ".mp4")):
+                    video_files.append(os.path.join(root, f))
+
+    print(f"[INFO] Found {len(video_files)} video files under {input_path}")
+
+    for video_path in video_files:
+        # Match folder name (e.g. "2015-02-21 - 18-00 Chelsea 1 - 1 Burnley")
+        parent_folder = os.path.basename(os.path.dirname(video_path))
+        clip_name = os.path.splitext(os.path.basename(video_path))[0]
+
+        # Create output directory for each game and clip
+        output_dir = os.path.join(output_root, parent_folder, clip_name)
+        os.makedirs(output_dir, exist_ok=True)
+
+        print(f"[INFO] Extracting {video_path} → {output_dir}")
+        try:
+            extract_frames_from_clip(video_path, output_dir, fps_target=args.fps)
+        except Exception as e:
+            print(f"[WARN] Failed to process {video_path}: {e}")
+

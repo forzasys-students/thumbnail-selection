@@ -1,11 +1,16 @@
-import os
+import os, sys
 import csv
 import cv2
 from collections import Counter
 from typing import List
 
-from parse_labels import parse_camera_labels
-from frame_extractor import extract_adaptive_frames
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.training.parse_labels import parse_camera_labels
+from src.utils.frame_extractor import extract_adaptive_frames
 
 
 def find_all_games(data_path: str) -> List[str]:

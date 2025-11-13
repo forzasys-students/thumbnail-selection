@@ -1,5 +1,9 @@
-import os
-import sys
+import os, sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 import time
 import argparse
 import torch
@@ -7,8 +11,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms, models
-sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-from dataset import FrameDataset
+from src.training.dataset import FrameDataset
+
 
 def get_model(model_name: str, num_classes: int):
     """Return a model architecture based on name."""

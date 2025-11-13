@@ -22,4 +22,5 @@ echo "Python path: $(which python)"
 python -c "import torch; print('CUDA available?', torch.cuda.is_available(), '| Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
 
 cd ~/thumbnail-selection
-python train.py "$@"
+python src/training/train.py "$@"
+

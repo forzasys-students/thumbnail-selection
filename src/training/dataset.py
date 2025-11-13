@@ -18,15 +18,13 @@ class FrameDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
     
-        # Make path robust: handle Windows absolute paths and backslashes
         rel_path = str(row['filepath'])
-        rel_path = rel_path.replace('\\', '/')              # win → posix
+        rel_path = rel_path.replace('\\', '/')           
         low = rel_path.lower()
         anchor = '/frames_global/'
         i = low.find(anchor)
         if i != -1:
-            rel_path = rel_path[i + len(anchor):]           # strip everything up to frames_global/
-        # Else: assume it's already relative
+            rel_path = rel_path[i + len(anchor):]          
     
         img_path = os.path.join(self.root_dir, rel_path)
     
