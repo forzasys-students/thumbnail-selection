@@ -1,9 +1,13 @@
 #!/bin/bash
 
 #  DEFAULT INPUTS
-DEFAULT_GAME_NAME="2015-02-21 - 18-00 Chelsea 1 - 1 Burnley"
-DEFAULT_CLIP_NAME="1_224p"
-DEFAULT_VIDEO_PATH="../data/SoccerNet/2015-02-21 - 18-00 Chelsea 1 - 1 Burnley/1_224p.mkv"
+
+DEFAULT_GAME_NAME="2014 - IK Sirius AIK forzasys_goal_clip"
+#DEFAULT_GAME_NAME="2015-02-21 - 18-00 Crystal Palace 1 - 2 Arsenal"
+DEFAULT_CLIP_NAME="goalclip"
+#DEFAULT_CLIP_NAME="1_224p"
+DEFAULT_VIDEO_PATH="../data/goalclip.mp4"
+#DEFAULT_VIDEO_PATH="../data/SoccerNet/england_epl/2014-2015/2015-02-21 - 18-00 Crystal Palace 1 - 2 Arsenal/1_224p.mkv"
 
 #  Parse args
 while [[ "$#" -gt 0 ]]; do
