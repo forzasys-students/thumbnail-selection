@@ -32,11 +32,11 @@ echo "[INFO] Using video: $VIDEO_PATH"
 INFER_ROOT="../data/inference_output"
 FRAMES_DIR="$INFER_ROOT/frames/${GAME_NAME}/${CLIP_NAME}"
 PRED_DIR="$INFER_ROOT/predictions"
-SEG_DIR="$INFER_ROOT/closeup_segments"
+SEG_DIR="$INFER_ROOT/segments"
 KEYFRAME_DIR="$INFER_ROOT/keyframes"
 
 PRED_CSV="$PRED_DIR/predictions_resnet50.csv"
-SEG_CSV="$SEG_DIR/closeup_segments.csv"
+SEG_CSV="$SEG_DIR/segments.csv"
 KEYFRAME_CSV="$KEYFRAME_DIR/keyframes.csv"
 
 WEIGHTS_PATH="checkpoints/resnet50_best.pt"
@@ -57,9 +57,9 @@ python src/inference/inference_model.py \
     --weights "$WEIGHTS_PATH" \
     --output_csv "$PRED_CSV"
 
-#  STEP 3 — Close-up Segments
-echo "[STEP 3] Extracting close-up segments..."
-python src/inference/extract_closeup_frames.py \
+#  STEP 3 — Extracting Priority based Segments
+echo "[STEP 3] Extracting segments..."
+python src/inference/extract_priority_segments.py \
     --pred_csv "$PRED_CSV" \
     --min_length 1 \
     --min_segments_per_clip 20 \
