@@ -325,7 +325,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
                 continue  # Skip this frame
 
             # FILTER 3: Remove distant shots
-            # Threshold: 0.12 (object must occupy at least 12% of frame)
+            # Threshold: 0.10 (object must occupy at least 10% of frame)
             close = closeup_bbox_score(path)
             if close < 0.12:
                 continue  # Skip this frame
@@ -463,6 +463,11 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     print(f"[INFO] Selected top {TOP_N_GLOBAL} keyframes from {len(results)} candidates")
     print(f"[INFO] Keyframes saved to {output_csv}")
     print(f"[INFO] Score range: {final_results['final_score'].min():.3f} - {final_results['final_score'].max():.3f}")
+    
+    # Print priority distribution in final selection
+    print("\n[INFO] Priority distribution in final selection:")
+    #print(final_results['segment_priority'].value_counts().to_string())
+    print(final_results['priority'].value_counts().to_string())
 
 
 # ========== COMMAND-LINE INTERFACE ==========

@@ -48,7 +48,7 @@ echo "[STEP 1] Extracting frames..."
 python src/utils/frame_extractor.py \
     --input_path "$VIDEO_PATH" \
     --output_dir "$FRAMES_DIR" \
-    --fps 1
+    --fps 10
 
 #  STEP 2 — Inference
 echo "[STEP 2] Running ResNet50 inference..."
@@ -61,9 +61,11 @@ python src/inference/inference_model.py \
 echo "[STEP 3] Extracting close-up segments..."
 python src/inference/extract_closeup_frames.py \
     --pred_csv "$PRED_CSV" \
-    --min_length 3 \
+    --min_length 1 \
+    --min_segments_per_clip 20 \
     --copy_dir "$SEG_DIR" \
     --output_csv "$SEG_CSV"
+
 
 #  STEP 4 — Keyframe Selection
 echo "[STEP 4] Selecting keyframes..."
