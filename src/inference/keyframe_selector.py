@@ -442,7 +442,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     results_df = results_df.sort_values('final_score', ascending=False)
     
     # CONFIGURABLE: Change this number to control total output frames
-    TOP_N_GLOBAL = 30  # Keep only top 15 frames across all segments
+    TOP_N_GLOBAL = 15  # Keep only top 15 frames across all segments
     
     # Get indices of frames to keep
     top_n_indices = set(results_df.head(TOP_N_GLOBAL).index)

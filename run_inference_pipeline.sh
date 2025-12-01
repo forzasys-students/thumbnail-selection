@@ -2,12 +2,10 @@
 
 #  DEFAULT INPUTS
 
-DEFAULT_GAME_NAME="2014 - IK Sirius AIK forzasys_goal_clip"
-#DEFAULT_GAME_NAME="2015-02-21 - 18-00 Crystal Palace 1 - 2 Arsenal"
-DEFAULT_CLIP_NAME="goalclip"
-#DEFAULT_CLIP_NAME="1_224p"
+DEFAULT_GAME_NAME="SomeGameName"
+DEFAULT_CLIP_NAME="SomeName"
 DEFAULT_VIDEO_PATH="../data/goalclip.mp4"
-#DEFAULT_VIDEO_PATH="../data/SoccerNet/england_epl/2014-2015/2015-02-21 - 18-00 Crystal Palace 1 - 2 Arsenal/1_224p.mkv"
+DEFAULT_MODEL="resnet18"
 
 #  Parse args
 while [[ "$#" -gt 0 ]]; do
@@ -15,6 +13,7 @@ while [[ "$#" -gt 0 ]]; do
         --game_name) GAME_NAME="$2"; shift ;;
         --clip) CLIP_NAME="$2"; shift ;;
         --video) VIDEO_PATH="$2"; shift ;;
+        --model) MODEL_NAME="$2"; shift ;;   
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
@@ -23,10 +22,12 @@ done
 GAME_NAME="${GAME_NAME:-$DEFAULT_GAME_NAME}"
 CLIP_NAME="${CLIP_NAME:-$DEFAULT_CLIP_NAME}"
 VIDEO_PATH="${VIDEO_PATH:-$DEFAULT_VIDEO_PATH}"
+MODEL_NAME="${MODEL_NAME:-$DEFAULT_MODEL}"   
 
 echo "[INFO] Using game: $GAME_NAME"
 echo "[INFO] Using clip: $CLIP_NAME"
 echo "[INFO] Using video: $VIDEO_PATH"
+echo "[INFO] Using model: $MODEL_NAME"       
 
 #  Paths
 INFER_ROOT="../data/inference_output"
@@ -35,11 +36,11 @@ PRED_DIR="$INFER_ROOT/predictions"
 SEG_DIR="$INFER_ROOT/segments"
 KEYFRAME_DIR="$INFER_ROOT/keyframes"
 
-PRED_CSV="$PRED_DIR/predictions_resnet50.csv"
+PRED_CSV="$PRED_DIR/predictions_${MODEL_NAME}.csv"    
 SEG_CSV="$SEG_DIR/segments.csv"
 KEYFRAME_CSV="$KEYFRAME_DIR/keyframes.csv"
 
-WEIGHTS_PATH="checkpoints/resnet50_best.pt"
+WEIGHTS_PATH="checkpoints/${MODEL_NAME}_best.pt"       
 
 mkdir -p "$FRAMES_DIR" "$PRED_DIR" "$SEG_DIR" "$KEYFRAME_DIR"
 
@@ -51,10 +52,11 @@ python src/utils/frame_extractor.py \
     --fps 10
 
 #  STEP 2 — Inference
-echo "[STEP 2] Running ResNet50 inference..."
+echo "[STEP 2] Running inference ($MODEL_NAME)..."
 python src/inference/inference_model.py \
     --frames_root "$FRAMES_DIR" \
     --weights "$WEIGHTS_PATH" \
+    --model "$MODEL_NAME" \
     --output_csv "$PRED_CSV"
 
 #  STEP 3 — Extracting Priority based Segments
@@ -66,7 +68,6 @@ python src/inference/extract_priority_segments.py \
     --copy_dir "$SEG_DIR" \
     --output_csv "$SEG_CSV"
 
-
 #  STEP 4 — Keyframe Selection
 echo "[STEP 4] Selecting keyframes..."
 python src/inference/keyframe_selector.py \
@@ -74,6 +75,5 @@ python src/inference/keyframe_selector.py \
     --seg_csv "$SEG_CSV" \
     --output_csv "$KEYFRAME_CSV" \
     --output_dir "$KEYFRAME_DIR"
-
 
 echo "[DONE] Pipeline completed successfully."
