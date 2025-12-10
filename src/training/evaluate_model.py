@@ -110,7 +110,7 @@ class ImageFolderDataset(torch.utils.data.Dataset):
 # MAIN EVALUATION PIPELINE
 def main():
     parser = argparse.ArgumentParser(description="Evaluate model on unique test set.")
-    parser.add_argument("--data_root", type=str, default="/fp/homes01/u01/ec-aliaana/data/unique_test_set",
+    parser.add_argument("--data_root", type=str, default="/fp/homes01/u01/ec-aliaana/data/unique_test_set_v2",
                         help="Path to manually collected test dataset.")
     parser.add_argument("--model_name", type=str, default="resnet18",
                         help="Model architecture: resnet18, resnet50, or vit.")

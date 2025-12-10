@@ -1,5 +1,1 @@
-checkpoints/resnet50_best.pt filter=lfs diff=lfs merge=lfs -text
-checkpoints/resnet18_best.pt filter=lfs diff=lfs merge=lfs -text
-checkpoints/convnext_best.pt filter=lfs diff=lfs merge=lfs -text
-checkpoints/efficientnet_best.pt filter=lfs diff=lfs merge=lfs -text
-checkpoints/vit_best.pt filter=lfs diff=lfs merge=lfs -text
+*.pt filter=lfs diff=lfs merge=lfs -text

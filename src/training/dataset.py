@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 class FrameDataset(Dataset):
     def __init__(self, csv_file, root_dir, transform=None):
         self.data = pd.read_csv(csv_file)
-        self.root_dir = root_dir
+        self.root_dir = root_dir              # required for portable paths
         self.transform = transform
 
         labels = sorted(self.data['label'].unique())
@@ -17,20 +17,15 @@ class FrameDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
-    
-        rel_path = str(row['filepath'])
-        rel_path = rel_path.replace('\\', '/')           
-        low = rel_path.lower()
-        anchor = '/frames_global/'
-        i = low.find(anchor)
-        if i != -1:
-            rel_path = rel_path[i + len(anchor):]          
-    
-        img_path = os.path.join(self.root_dir, rel_path)
-    
+
+        # CSV stores relative path: <label>/<filename>.jpg
+        rel = row['rel_path'].replace("\\", "/")  # windows-proof
+        img_path = os.path.join(self.root_dir, rel)
+
         image = Image.open(img_path).convert("RGB")
         label = self.label_map[row['label']]
-    
+
         if self.transform:
             image = self.transform(image)
+
         return image, label
