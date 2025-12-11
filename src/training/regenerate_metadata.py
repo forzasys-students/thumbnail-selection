@@ -14,7 +14,7 @@ import os
 import csv
 from collections import defaultdict
 
-BALANCED_ROOT = "../../../data/balanced_dataset_v1"
+BALANCED_ROOT = "../../../data/balanced_dataset_v2"
 
 LABELS = [
     "Close-up_behind_the_goal",

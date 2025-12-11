@@ -140,7 +140,7 @@ for lbl in LABELS:
         shortfall = TARGET_PER_CLASS - saved_count
         print(f"    SHORT by {shortfall} frames (need more data or lower threshold)")
     elif saved_count >= TARGET_PER_CLASS:
-        print(f"  ✓ Target reached!")
+        print(f" Target reached!")
 
 # ANALYZE GAME DISTRIBUTION
 print("\n Computing game distribution per class...\n")
