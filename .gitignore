@@ -7,6 +7,7 @@ __pycache__/
 
 # Data (SoccerNet videos/images)
 data/
+inference_outputs/
 *.mkv
 *.mp4
 *.npy

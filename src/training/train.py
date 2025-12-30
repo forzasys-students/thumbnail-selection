@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--data_root", type=str,
-                        default="/fp/homes01/u01/ec-aliaana/data/balanced_dataset_v1",)
+                        default="/fp/homes01/u01/ec-aliaana/data/balanced_dataset_v2",)
     parser.add_argument("--csv_file", type=str, default="metadata.csv")
     args = parser.parse_args()
 

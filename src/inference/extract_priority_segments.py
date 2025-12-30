@@ -1,6 +1,5 @@
 """
 SEGMENT DETECTION WITH PRIORITY FALLBACK
-==================================================
 
 OVERVIEW:
 This script identifies frame segments suitable for thumbnail selection.
@@ -27,7 +26,7 @@ from pathlib import Path
 import shutil
 
 
-# ========== SHOT TYPE PRIORITIES ==========
+# SHOT TYPE PRIORITIES
 
 # P1: Close-up shots (highest priority for thumbnails)
 CLOSEUP_LABELS = {
@@ -224,7 +223,7 @@ def save_segments(segments, output_csv="segments.csv", copy_dir=None):
     df.to_csv(output_csv, index=False)
     
     # Print summary statistics
-    print(f"[INFO] Saved {len(segments)} segments → {output_csv}")
+    print(f"[INFO] Saved {len(segments)} segments -> {output_csv}")
     print(f"[INFO] Priority breakdown:")
     print(df["priority"].value_counts().to_string())
 

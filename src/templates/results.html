@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keyframe Results</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/results.css') }}">
+</head>
+<body>
+    <div class="header">
+        <h1>Extracted Keyframes</h1>
+        <p>Review and select the best frames for your video thumbnails</p>
+    </div>
+    
+    <div class="container">
+        <div class="controls">
+            <div class="count-badge">
+                {% if keyframes %}
+                    {{ keyframes|length }} keyframe{{ 's' if keyframes|length != 1 else '' }} found
+                {% else %}
+                    No keyframes found
+                {% endif %}
+            </div>
+            
+            <div class="button-group">
+                <div class="view-toggle">
+                    <button class="view-btn active" onclick="setView('grid')">Grid</button>
+                    <button class="view-btn" onclick="setView('list')">List</button>
+                </div>
+                {% if keyframes %}
+                <button class="btn-secondary" onclick="downloadAll()">Download All</button>
+                {% endif %}
+                <button class="btn-primary" onclick="window.location.href='{{ url_for('index') }}'">Process New Video</button>
+            </div>
+        </div>
+        
+        {% if keyframes %}
+        <div class="gallery" id="gallery">
+            {% for img in keyframes %}
+            <div class="keyframe-card" onclick="openModal({{ loop.index0 }})">
+                <div class="image-wrapper">
+                    <img src="{{ url_for('serve_keyframe', filename=img) }}" 
+                         alt="{{ img }}"
+                         loading="lazy">
+                </div>
+                <div class="card-info">
+                    <div class="card-title">Frame {{ loop.index }}</div>
+                    <div class="card-meta">{{ img }}</div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div class="empty-state-icon">📭</div>
+            <h2>No Keyframes Found</h2>
+            <p>Process a video to extract keyframes</p>
+            <button class="btn-primary" style="margin-top: 20px;" onclick="window.location.href='{{ url_for('index') }}'">
+                Upload Video
+            </button>
+        </div>
+        {% endif %}
+    </div>
+    
+    <!-- Modal for image preview -->
+    <div id="imageModal" class="modal" onclick="closeModal()">
+        <span class="modal-close">&times;</span>
+        <button class="modal-nav modal-prev" onclick="event.stopPropagation(); changeImage(-1)">❮</button>
+        <div class="modal-content">
+            <img class="modal-image" id="modalImage" src="" alt="">
+        </div>
+        <button class="modal-nav modal-next" onclick="event.stopPropagation(); changeImage(1)">❯</button>
+        <div class="modal-info" id="modalInfo"></div>
+    </div>
+
+    <script>
+        const images = {{ keyframes|tojson }};
+    </script>
+    <script src="{{ url_for('static', filename='js/results.js') }}"></script>
+</body>
+</html>

@@ -233,9 +233,9 @@ with open(summary_txt, "w", encoding="utf-8") as f:
 
 print("\n===============================================================")
 print("Balanced dataset!")
-print(f"→ Output: {OUT_ROOT}")
-print(f"→ Total images: {len(metadata_rows):,}")
-print(f"\n→ Files saved:")
+print(f" Output: {OUT_ROOT}")
+print(f" Total images: {len(metadata_rows):,}")
+print(f"\n Files saved:")
 print(f"   • {counts_csv}")
 print(f"   • {meta_csv}")
 print(f"   • {games_csv}")

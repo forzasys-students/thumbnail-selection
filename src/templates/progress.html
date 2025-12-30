@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Video...</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/progress.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Processing Video</h1>
+        <p class="subtitle">Please wait while we extract keyframes from your video</p>
+        
+        <div class="progress-container">
+            <div class="progress-bar-wrapper">
+                <div class="progress-bar" id="progressBar">0%</div>
+            </div>
+        </div>
+        
+        <div class="stage-indicator">
+            <div class="stage-title">
+                <span class="spinner"></span>
+                <span id="stageTitle">Initializing...</span>
+            </div>
+            <div class="stage-message" id="stageMessage">Starting pipeline...</div>
+        </div>
+        
+        <ul class="steps-list">
+            <li class="step-item" id="step1">
+                <div class="step-icon">1</div>
+                <div>Extracting frames from video</div>
+            </li>
+            <li class="step-item" id="step2">
+                <div class="step-icon">2</div>
+                <div>Running inference model</div>
+            </li>
+            <li class="step-item" id="step3">
+                <div class="step-icon">3</div>
+                <div>Extracting priority segments</div>
+            </li>
+            <li class="step-item" id="step4">
+                <div class="step-icon">4</div>
+                <div>Selecting keyframes</div>
+            </li>
+        </ul>
+        
+        <div id="completeMessage" style="display: none;">
+            <div class="redirect-message">
+                 Processing complete! Redirecting to results...
+            </div>
+        </div>
+        
+        <div id="errorMessage" style="display: none;">
+            <div class="error-message">
+                 An error occurred during processing
+            </div>
+            <button onclick="window.location.href='/'">Try Again</button>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/progress.js') }}"></script>
+</body>
+</html>

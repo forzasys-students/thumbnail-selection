@@ -81,7 +81,7 @@ def classify_all_frames(model, root_dir: str, device, output_csv="predictions.cs
     df = pd.DataFrame(results, columns=["game_name", "clip_name", "frame_path", "pred_label", "confidence"])
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     df.to_csv(output_csv, index=False)
-    print(f"[INFO] Saved predictions for {len(df)} frames → {output_csv}")
+    print(f"[INFO] Saved predictions for {len(df)} frames -> {output_csv}")
     return df
 
 

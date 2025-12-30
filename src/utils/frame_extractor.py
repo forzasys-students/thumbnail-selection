@@ -184,7 +184,7 @@ def extract_frames_from_clip(video_path, output_dir, fps_target=1):
         idx += 1
 
     cap.release()
-    print(f"[INFO] Extracted {saved} frames (~{fps_target} FPS) from {video_path} → {output_dir}")
+    print(f"[INFO] Extracted {saved} frames (~{fps_target} FPS) from {video_path} -> {output_dir}")
 
 
 if __name__ == "__main__":
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         output_dir = os.path.join(output_root, parent_folder, clip_name)
         os.makedirs(output_dir, exist_ok=True)
 
-        print(f"[INFO] Extracting {video_path} → {output_dir}")
+        print(f"[INFO] Extracting {video_path} -> {output_dir}")
         try:
             extract_frames_from_clip(video_path, output_dir, fps_target=args.fps)
         except Exception as e:

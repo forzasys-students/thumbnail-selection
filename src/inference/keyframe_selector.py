@@ -1,16 +1,15 @@
 """
 KEYFRAME SELECTION WITH BRISQUE QUALITY SCORING
-================================================
 
 OVERVIEW:
-This script selects the top 3 thumbnail-worthy keyframes from each video segment.
+This script selects the top 10 thumbnail-worthy keyframes from each video segment.
 It uses a multi-stage filtering approach to balance speed and quality.
 
 WORKFLOW:
 1. Fast pre-filtering: Remove overlays, blurry frames, and distant shots
 2. Priority ranking: Faces > Celebration poses > Closeup framing
 3. BRISQUE scoring: Apply expensive quality model only to top candidates
-4. Final selection: Combine all metrics into weighted score, pick top 3
+4. Final selection: Combine all metrics into weighted score, pick top 10
 
 PRIORITY RULES:
 - P1: Contains face(s) → ranked by largest face bbox area
@@ -27,7 +26,7 @@ from ultralytics import YOLO
 from brisque import BRISQUE
 
 
-# ========== LOAD AI MODELS (ONE-TIME INITIALIZATION) ==========
+# LOAD AI MODELS (ONE-TIME INITIALIZATION)
 # BRISQUE: No-reference image quality assessment (lower score = better quality)
 brisque_model = BRISQUE()
 
@@ -41,7 +40,7 @@ obj_model = YOLO("yolov8n.pt")
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
 
-# ========== QUALITY METRIC FUNCTIONS ==========
+# QUALITY METRIC FUNCTIONS
 
 def laplacian_variance(path):
     """
@@ -259,7 +258,7 @@ def extract_frame_index(path):
     return int("".join(c for c in os.path.basename(path) if c.isdigit()))
 
 
-# ========== MAIN KEYFRAME SELECTION PIPELINE ==========
+# MAIN KEYFRAME SELECTION PIPELINE
 def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     """
     Main function: Selects top 3 keyframes per video segment.
@@ -282,7 +281,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
         output_dir: Directory to save selected keyframe images
     """
     
-    # ===== LOAD DATA =====
+    # LOAD DATA
     df_preds = pd.read_csv(pred_csv)    # Load all candidate frames
     df_segs = pd.read_csv(seg_csv)      # Load segment boundaries
     
@@ -294,7 +293,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     
     results = []  # Will store metadata for all selected keyframes
 
-    # ===== PROCESS EACH SEGMENT =====
+    # PROCESS EACH SEGMENT
     for _, seg in tqdm(df_segs.iterrows(), total=len(df_segs), desc="Processing segments"):
         seg_id = seg["segment_id"]  # Unique segment identifier
         
@@ -307,7 +306,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
 
         candidates = []  # Will store frames that pass all filters
 
-        # ===== STAGE 1: FAST PRE-FILTERING =====
+        # STAGE 1: FAST PRE-FILTERING 
         # Loop through all candidate frames in this segment
         for _, row in segment_frames.iterrows():
             path = row["frame_path"]
@@ -330,7 +329,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
             if close < 0.12:
                 continue  # Skip this frame
 
-            # ===== FRAME PASSED ALL FILTERS - COMPUTE METRICS =====
+            # FRAME PASSED ALL FILTERS - COMPUTE METRICS
             
             # Detect faces (for priority assignment)
             faces, face_area = detect_faces_and_size(path)
@@ -338,7 +337,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
             # Detect celebration poses (for priority assignment)
             pose = celebration_score(path)
             
-            # ===== ASSIGN PRIORITY LEVEL =====
+            # ASSIGN PRIORITY LEVEL
             # Priority determines initial ranking before BRISQUE scoring
             
             if faces > 0:
@@ -368,12 +367,12 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
                 'sharp': sharp
             })
 
-        # ===== STAGE 2: PRIORITY SORTING =====
+        # STAGE 2: PRIORITY SORTING
         # Sort by priority first, then by rank_value (descending) within each priority
         # Take top 5 candidates to limit expensive BRISQUE computation
         candidates_sorted = sorted(candidates, key=lambda x: (x['priority'], -x['rank_value']))[:5]
 
-        # ===== STAGE 3: APPLY BRISQUE (EXPENSIVE!) =====
+        # STAGE 3: APPLY BRISQUE (EXPENSIVE!)
         # Only compute BRISQUE on top 5 candidates per segment (not all frames)
         # This is the key optimization that makes the pipeline fast
         for c in candidates_sorted:
@@ -383,7 +382,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
             # Normalized: 1 = best, 0 = worst
             c['brisque_norm'] = max(0, 1 - c['brisque']/100)
         
-        # ===== STAGE 4: FINAL WEIGHTED SCORING =====
+        # STAGE 4: FINAL WEIGHTED SCORING
         for c in candidates_sorted:
             # Compute additional metrics
             sat = saturation_score(c['path'])
@@ -406,11 +405,11 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
             )
             c['final_score'] = score
 
-        # ===== STAGE 5: SELECT TOP 3 KEYFRAMES =====
+        # STAGE 5: SELECT TOP 3 KEYFRAMES
         # Sort by final score (highest first) and take top 3
         top3 = sorted(candidates_sorted, key=lambda x: x['final_score'], reverse=True)[:3]
 
-        # ===== STAGE 6: SAVE SELECTED KEYFRAMES =====
+        # STAGE 6: SAVE SELECTED KEYFRAMES
         for rank, c in enumerate(top3):
             # Generate output filename: segment_001_top1.jpg, segment_001_top2.jpg, etc.
             out = os.path.join(output_dir, f"segment_{seg_id:03d}_top{rank+1}.jpg")
@@ -435,7 +434,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
                 "saved_path": out                    # Where we saved it
             })
 
-    # ===== GLOBAL TOP-N SELECTION =====
+    # GLOBAL TOP-N SELECTION
     # Sort ALL selected keyframes by final_score and keep only the best N
     # This ensures we get the absolute best frames across the entire video
     results_df = pd.DataFrame(results)
@@ -457,7 +456,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     # Keep only top N in results
     final_results = results_df.head(TOP_N_GLOBAL)
     
-    # ===== EXPORT RESULTS =====
+    # EXPORT RESULTS
     # Save all metadata to CSV for analysis/review
     final_results.to_csv(output_csv, index=False)
     print(f"[INFO] Selected top {TOP_N_GLOBAL} keyframes from {len(results)} candidates")
@@ -470,7 +469,7 @@ def select_keyframes(pred_csv, seg_csv, output_csv, output_dir):
     print(final_results['priority'].value_counts().to_string())
 
 
-# ========== COMMAND-LINE INTERFACE ==========
+# COMMAND-LINE INTERFACE
 if __name__ == "__main__":
     """
     Run from command line:
