@@ -104,13 +104,13 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-    os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("models", exist_ok=True)
 
     print(f"Training {model_name.upper()} on {device} for {num_epochs} epochs "
           f"| {num_classes} classes | {len(dataset)} samples")
 
     best_val_acc = 0.0
-    best_model_path = f"checkpoints/{model_name}_best.pt"
+    best_model_path = f"models/{model_name}_best.pt"
 
     # Training loop
     for epoch in range(num_epochs):

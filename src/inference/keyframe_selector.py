@@ -31,10 +31,10 @@ from brisque import BRISQUE
 brisque_model = BRISQUE()
 
 # YOLOv8 Pose: Detects human keypoints for celebration pose detection
-pose_model = YOLO("yolov8n-pose.pt")
+pose_model = YOLO("models/yolo/yolov8n-pose.pt")
 
 # YOLOv8 Object Detection: Detects objects for closeup framing analysis
-obj_model = YOLO("yolov8n.pt")
+obj_model = YOLO("models/yolo/yolov8n.pt")
 
 # Haar Cascade: Fast face detection (less accurate but very fast)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")

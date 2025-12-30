@@ -35,7 +35,7 @@ Model Examples:
 
 Model File Requirement: |
   Model files must exist at:
-    thumbnail-selection/checkpoints/<model>_best.pt
+    thumbnail-selection/models/<model>_best.pt
 
 Pipeline Steps:
   1: Extract frames from the input video (default 10 FPS - adjustable inside run_inference_pipeline.sh)

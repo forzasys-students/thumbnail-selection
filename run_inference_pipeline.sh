@@ -42,7 +42,7 @@ PRED_CSV="$PRED_DIR/predictions_${MODEL_NAME}.csv"
 SEG_CSV="$SEG_DIR/segments.csv"
 KEYFRAME_CSV="$KEYFRAME_DIR/keyframes.csv"
 
-WEIGHTS_PATH="checkpoints/${MODEL_NAME}_best.pt"       
+WEIGHTS_PATH="models/${MODEL_NAME}_best.pt"       
 
 mkdir -p "$FRAMES_DIR" "$PRED_DIR" "$SEG_DIR" "$KEYFRAME_DIR"
 

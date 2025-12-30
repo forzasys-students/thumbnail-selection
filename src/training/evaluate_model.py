@@ -24,6 +24,15 @@ import pandas as pd
 from PIL import Image
 import numpy as np
 
+EVAL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../evaluation")
+CONF_MATRIX_DIR = os.path.join(EVAL_DIR, "confusion_matrix")
+GRAPH_DIR = os.path.join(EVAL_DIR, "graph_curve")
+METRICS_DIR = os.path.join(EVAL_DIR, "training_metrics")
+
+os.makedirs(CONF_MATRIX_DIR, exist_ok=True)
+os.makedirs(GRAPH_DIR, exist_ok=True)
+os.makedirs(METRICS_DIR, exist_ok=True)
+
 
 def get_model(model_name, num_classes, weights_path):
     model_name = model_name.lower()
@@ -98,7 +107,7 @@ def main():
                         help="Path to manually collected test dataset.")
     parser.add_argument("--model_name", type=str, default="resnet18",
                         help="Model architecture: resnet18, resnet50, or vit.")
-    parser.add_argument("--weights", type=str, default="checkpoints/resnet18_best.pt",
+    parser.add_argument("--weights", type=str, default="models/resnet18_best.pt",
                         help="Path to trained model checkpoint (.pt).")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for inference.")
     args = parser.parse_args()
@@ -152,7 +161,7 @@ def main():
     plt.ylabel("True Label")
     plt.title(f"Confusion Matrix - {args.model_name.upper()}")
     plt.tight_layout()
-    plt.savefig(f"confusion_matrix_{args.model_name}.png")
+    #plt.savefig(f"confusion_matrix_{args.model_name}.png")
 
     # Additional: Precision-Recall and F1-Recall curves
     y_true = np.array(all_labels)
@@ -178,12 +187,22 @@ def main():
     axes[1].grid(True)
 
     plt.tight_layout()
-    plt.savefig(f"curves_{args.model_name}.png")
+    plt.savefig(os.path.join(GRAPH_DIR, f"f1_precision_recall_{args.model_name}.png"))
 
-    df_report.to_csv(f"metrics_{args.model_name}.csv")
-    print(f"\n Confusion matrix saved as confusion_matrix_{args.model_name}.png")
-    print(f" Metrics saved as metrics_{args.model_name}.csv")
-    print(f" PR/F1 curves saved as curves_{args.model_name}.png\n")
+    # Save metrics and confusion matrix to proper folders
+    df_report.to_csv(os.path.join(METRICS_DIR, f"metrics_{args.model_name}.csv"))
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(conf_mat, annot=True, fmt="d", cmap="Blues",
+                xticklabels=dataset.classes, yticklabels=dataset.classes)
+    plt.xlabel("Predicted Label")
+    plt.ylabel("True Label")
+    plt.title(f"Confusion Matrix - {args.model_name.upper()}")
+    plt.tight_layout()
+    plt.savefig(os.path.join(CONF_MATRIX_DIR, f"confusion_matrix_{args.model_name}.png"))
+
+    print(f"\nConfusion matrix saved to: {os.path.join(CONF_MATRIX_DIR, f'confusion_matrix_{args.model_name}.png')}")
+    print(f"Metrics saved to: {os.path.join(METRICS_DIR, f'metrics_{args.model_name}.csv')}")
+    print(f"PR/F1 curves saved to: {os.path.join(GRAPH_DIR, f'f1_precision_recall_{args.model_name}.png')}\n")
 
 
 if __name__ == "__main__":

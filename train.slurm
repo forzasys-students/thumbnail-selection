@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
 #SBATCH --time=04:00:00
-#SBATCH --output=logs/train_%j.out
-#SBATCH --error=logs/train_%j.err
+#SBATCH --output=evaluation/training_logs/train_%j.out
+#SBATCH --error=evaluation/training_logs/train_%j.err
 
 set -o errexit
 set -o nounset

@@ -33,7 +33,7 @@ def load_model(model_name: str, weights_path: str, num_classes: int):
     # build correct architecture
     model = get_model(model_name, num_classes=num_classes)
 
-    # ensure checkpoint exists
+    # ensure models exists
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"[ERROR] Model weights not found at: {weights_path}")
 
