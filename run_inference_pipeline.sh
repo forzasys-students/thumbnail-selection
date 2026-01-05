@@ -51,7 +51,7 @@ echo "[STEP 1] Extracting frames..."
 python src/utils/frame_extractor.py \
     --input_path "$VIDEO_PATH" \
     --output_dir "$FRAMES_DIR" \
-    --fps 10 2>&1
+    --fps 3 2>&1
 
 if [ $? -ne 0 ]; then
     echo "[ERROR] Frame extraction failed"

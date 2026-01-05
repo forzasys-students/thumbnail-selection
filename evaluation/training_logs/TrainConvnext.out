@@ -1,0 +1,321 @@
+Starting job 2863592 on gpu-11 on Fox at Mon Jan 5 15:18:24 CET 2026
+
+Python path: /fp/homes01/u01/ec-aliaana/.conda/envs/SoccerNet311/bin/python
+CUDA available? True | Device: NVIDIA GeForce RTX 3090
+Training label map: {'Close-up_behind_the_goal': 0, 'Close-up_corner': 1, 'Close-up_player_or_field_referee': 2, 'Close-up_side_staff': 3, 'Main_camera_center': 4, 'Main_camera_left': 5, 'Main_camera_right': 6, 'Public': 7}
+Training CONVNEXT on cuda for 20 epochs | 8 classes | 9535 samples
+[Epoch 1/20] Batch 0 Loss: 1.9986
+[Epoch 1/20] Batch 20 Loss: 0.7689
+[Epoch 1/20] Batch 40 Loss: 0.4943
+[Epoch 1/20] Batch 60 Loss: 0.1885
+[Epoch 1/20] Batch 80 Loss: 0.2277
+[Epoch 1/20] Batch 100 Loss: 0.2607
+[Epoch 1/20] Batch 120 Loss: 0.2629
+[Epoch 1/20] Batch 140 Loss: 0.1259
+[Epoch 1/20] Batch 160 Loss: 0.2989
+[Epoch 1/20] Batch 180 Loss: 0.0525
+[Epoch 1/20] Batch 200 Loss: 0.1030
+[Epoch 1/20] Batch 220 Loss: 0.3294
+Epoch 1/20 done in 89.6s
+  Train Loss: 0.3982 | Val Loss: 0.2119 | Val Acc: 93.70%
+Saved new best model: models/convnext_best.pt
+[Epoch 2/20] Batch 0 Loss: 0.0920
+[Epoch 2/20] Batch 20 Loss: 0.0357
+[Epoch 2/20] Batch 40 Loss: 0.0504
+[Epoch 2/20] Batch 60 Loss: 0.2135
+[Epoch 2/20] Batch 80 Loss: 0.1564
+[Epoch 2/20] Batch 100 Loss: 0.0675
+[Epoch 2/20] Batch 120 Loss: 0.0847
+[Epoch 2/20] Batch 140 Loss: 0.1167
+[Epoch 2/20] Batch 160 Loss: 0.0315
+[Epoch 2/20] Batch 180 Loss: 0.1044
+[Epoch 2/20] Batch 200 Loss: 0.2082
+[Epoch 2/20] Batch 220 Loss: 0.0712
+Epoch 2/20 done in 80.8s
+  Train Loss: 0.1239 | Val Loss: 0.2139 | Val Acc: 94.02%
+Saved new best model: models/convnext_best.pt
+[Epoch 3/20] Batch 0 Loss: 0.0157
+[Epoch 3/20] Batch 20 Loss: 0.0100
+[Epoch 3/20] Batch 40 Loss: 0.0193
+[Epoch 3/20] Batch 60 Loss: 0.0153
+[Epoch 3/20] Batch 80 Loss: 0.0168
+[Epoch 3/20] Batch 100 Loss: 0.0765
+[Epoch 3/20] Batch 120 Loss: 0.0619
+[Epoch 3/20] Batch 140 Loss: 0.2486
+[Epoch 3/20] Batch 160 Loss: 0.0104
+[Epoch 3/20] Batch 180 Loss: 0.0141
+[Epoch 3/20] Batch 200 Loss: 0.0387
+[Epoch 3/20] Batch 220 Loss: 0.0386
+Epoch 3/20 done in 80.9s
+  Train Loss: 0.0554 | Val Loss: 0.1891 | Val Acc: 94.33%
+Saved new best model: models/convnext_best.pt
+[Epoch 4/20] Batch 0 Loss: 0.0569
+[Epoch 4/20] Batch 20 Loss: 0.0067
+[Epoch 4/20] Batch 40 Loss: 0.0163
+[Epoch 4/20] Batch 60 Loss: 0.0157
+[Epoch 4/20] Batch 80 Loss: 0.0236
+[Epoch 4/20] Batch 100 Loss: 0.0113
+[Epoch 4/20] Batch 120 Loss: 0.0202
+[Epoch 4/20] Batch 140 Loss: 0.0353
+[Epoch 4/20] Batch 160 Loss: 0.0064
+[Epoch 4/20] Batch 180 Loss: 0.0325
+[Epoch 4/20] Batch 200 Loss: 0.2675
+[Epoch 4/20] Batch 220 Loss: 0.0099
+Epoch 4/20 done in 81.0s
+  Train Loss: 0.0260 | Val Loss: 0.2095 | Val Acc: 94.02%
+[Epoch 5/20] Batch 0 Loss: 0.0037
+[Epoch 5/20] Batch 20 Loss: 0.1817
+[Epoch 5/20] Batch 40 Loss: 0.0066
+[Epoch 5/20] Batch 60 Loss: 0.0119
+[Epoch 5/20] Batch 80 Loss: 0.0167
+[Epoch 5/20] Batch 100 Loss: 0.0017
+[Epoch 5/20] Batch 120 Loss: 0.0017
+[Epoch 5/20] Batch 140 Loss: 0.0019
+[Epoch 5/20] Batch 160 Loss: 0.0031
+[Epoch 5/20] Batch 180 Loss: 0.0063
+[Epoch 5/20] Batch 200 Loss: 0.0212
+[Epoch 5/20] Batch 220 Loss: 0.0522
+Epoch 5/20 done in 81.1s
+  Train Loss: 0.0186 | Val Loss: 0.2157 | Val Acc: 94.44%
+Saved new best model: models/convnext_best.pt
+[Epoch 6/20] Batch 0 Loss: 0.0014
+[Epoch 6/20] Batch 20 Loss: 0.0020
+[Epoch 6/20] Batch 40 Loss: 0.0313
+[Epoch 6/20] Batch 60 Loss: 0.0461
+[Epoch 6/20] Batch 80 Loss: 0.0137
+[Epoch 6/20] Batch 100 Loss: 0.0063
+[Epoch 6/20] Batch 120 Loss: 0.0104
+[Epoch 6/20] Batch 140 Loss: 0.0019
+[Epoch 6/20] Batch 160 Loss: 0.0019
+[Epoch 6/20] Batch 180 Loss: 0.0110
+[Epoch 6/20] Batch 200 Loss: 0.0265
+[Epoch 6/20] Batch 220 Loss: 0.0015
+Epoch 6/20 done in 81.1s
+  Train Loss: 0.0257 | Val Loss: 0.2278 | Val Acc: 94.23%
+[Epoch 7/20] Batch 0 Loss: 0.0167
+[Epoch 7/20] Batch 20 Loss: 0.0021
+[Epoch 7/20] Batch 40 Loss: 0.0038
+[Epoch 7/20] Batch 60 Loss: 0.0554
+[Epoch 7/20] Batch 80 Loss: 0.0011
+[Epoch 7/20] Batch 100 Loss: 0.0009
+[Epoch 7/20] Batch 120 Loss: 0.0044
+[Epoch 7/20] Batch 140 Loss: 0.0023
+[Epoch 7/20] Batch 160 Loss: 0.0424
+[Epoch 7/20] Batch 180 Loss: 0.0105
+[Epoch 7/20] Batch 200 Loss: 0.0019
+[Epoch 7/20] Batch 220 Loss: 0.0026
+Epoch 7/20 done in 81.0s
+  Train Loss: 0.0221 | Val Loss: 0.3227 | Val Acc: 93.49%
+[Epoch 8/20] Batch 0 Loss: 0.0015
+[Epoch 8/20] Batch 20 Loss: 0.0026
+[Epoch 8/20] Batch 40 Loss: 0.0085
+[Epoch 8/20] Batch 60 Loss: 0.0071
+[Epoch 8/20] Batch 80 Loss: 0.0829
+[Epoch 8/20] Batch 100 Loss: 0.0055
+[Epoch 8/20] Batch 120 Loss: 0.0012
+[Epoch 8/20] Batch 140 Loss: 0.1792
+[Epoch 8/20] Batch 160 Loss: 0.0091
+[Epoch 8/20] Batch 180 Loss: 0.0010
+[Epoch 8/20] Batch 200 Loss: 0.0060
+[Epoch 8/20] Batch 220 Loss: 0.0671
+Epoch 8/20 done in 81.5s
+  Train Loss: 0.0226 | Val Loss: 0.2390 | Val Acc: 94.44%
+[Epoch 9/20] Batch 0 Loss: 0.0073
+[Epoch 9/20] Batch 20 Loss: 0.0031
+[Epoch 9/20] Batch 40 Loss: 0.0014
+[Epoch 9/20] Batch 60 Loss: 0.0356
+[Epoch 9/20] Batch 80 Loss: 0.0011
+[Epoch 9/20] Batch 100 Loss: 0.0042
+[Epoch 9/20] Batch 120 Loss: 0.0720
+[Epoch 9/20] Batch 140 Loss: 0.0605
+[Epoch 9/20] Batch 160 Loss: 0.0021
+[Epoch 9/20] Batch 180 Loss: 0.0005
+[Epoch 9/20] Batch 200 Loss: 0.0005
+[Epoch 9/20] Batch 220 Loss: 0.0319
+Epoch 9/20 done in 81.1s
+  Train Loss: 0.0164 | Val Loss: 0.2964 | Val Acc: 93.39%
+[Epoch 10/20] Batch 0 Loss: 0.0180
+[Epoch 10/20] Batch 20 Loss: 0.0018
+[Epoch 10/20] Batch 40 Loss: 0.0016
+[Epoch 10/20] Batch 60 Loss: 0.0042
+[Epoch 10/20] Batch 80 Loss: 0.0017
+[Epoch 10/20] Batch 100 Loss: 0.0024
+[Epoch 10/20] Batch 120 Loss: 0.0016
+[Epoch 10/20] Batch 140 Loss: 0.0067
+[Epoch 10/20] Batch 160 Loss: 0.0018
+[Epoch 10/20] Batch 180 Loss: 0.0011
+[Epoch 10/20] Batch 200 Loss: 0.0009
+[Epoch 10/20] Batch 220 Loss: 0.0277
+Epoch 10/20 done in 81.2s
+  Train Loss: 0.0157 | Val Loss: 0.3221 | Val Acc: 94.23%
+[Epoch 11/20] Batch 0 Loss: 0.0005
+[Epoch 11/20] Batch 20 Loss: 0.0014
+[Epoch 11/20] Batch 40 Loss: 0.0014
+[Epoch 11/20] Batch 60 Loss: 0.0047
+[Epoch 11/20] Batch 80 Loss: 0.0012
+[Epoch 11/20] Batch 100 Loss: 0.0099
+[Epoch 11/20] Batch 120 Loss: 0.0004
+[Epoch 11/20] Batch 140 Loss: 0.0004
+[Epoch 11/20] Batch 160 Loss: 0.0005
+[Epoch 11/20] Batch 180 Loss: 0.0009
+[Epoch 11/20] Batch 200 Loss: 0.0007
+[Epoch 11/20] Batch 220 Loss: 0.0173
+Epoch 11/20 done in 81.0s
+  Train Loss: 0.0061 | Val Loss: 0.2866 | Val Acc: 94.44%
+[Epoch 12/20] Batch 0 Loss: 0.0228
+[Epoch 12/20] Batch 20 Loss: 0.0094
+[Epoch 12/20] Batch 40 Loss: 0.0064
+[Epoch 12/20] Batch 60 Loss: 0.6254
+[Epoch 12/20] Batch 80 Loss: 0.0009
+[Epoch 12/20] Batch 100 Loss: 0.0036
+[Epoch 12/20] Batch 120 Loss: 0.0162
+[Epoch 12/20] Batch 140 Loss: 0.0009
+[Epoch 12/20] Batch 160 Loss: 0.0023
+[Epoch 12/20] Batch 180 Loss: 0.0005
+[Epoch 12/20] Batch 200 Loss: 0.0005
+[Epoch 12/20] Batch 220 Loss: 0.0354
+Epoch 12/20 done in 81.4s
+  Train Loss: 0.0171 | Val Loss: 0.3066 | Val Acc: 94.75%
+Saved new best model: models/convnext_best.pt
+[Epoch 13/20] Batch 0 Loss: 0.0005
+[Epoch 13/20] Batch 20 Loss: 0.0003
+[Epoch 13/20] Batch 40 Loss: 0.0089
+[Epoch 13/20] Batch 60 Loss: 0.0076
+[Epoch 13/20] Batch 80 Loss: 0.0006
+[Epoch 13/20] Batch 100 Loss: 0.0027
+[Epoch 13/20] Batch 120 Loss: 0.0126
+[Epoch 13/20] Batch 140 Loss: 0.0023
+[Epoch 13/20] Batch 160 Loss: 0.0019
+[Epoch 13/20] Batch 180 Loss: 0.1437
+[Epoch 13/20] Batch 200 Loss: 0.0022
+[Epoch 13/20] Batch 220 Loss: 0.0137
+Epoch 13/20 done in 81.2s
+  Train Loss: 0.0149 | Val Loss: 0.2726 | Val Acc: 94.02%
+[Epoch 14/20] Batch 0 Loss: 0.0050
+[Epoch 14/20] Batch 20 Loss: 0.0018
+[Epoch 14/20] Batch 40 Loss: 0.0005
+[Epoch 14/20] Batch 60 Loss: 0.0002
+[Epoch 14/20] Batch 80 Loss: 0.1120
+[Epoch 14/20] Batch 100 Loss: 0.0085
+[Epoch 14/20] Batch 120 Loss: 0.0004
+[Epoch 14/20] Batch 140 Loss: 0.0003
+[Epoch 14/20] Batch 160 Loss: 0.0009
+[Epoch 14/20] Batch 180 Loss: 0.0418
+[Epoch 14/20] Batch 200 Loss: 0.0005
+[Epoch 14/20] Batch 220 Loss: 0.0017
+Epoch 14/20 done in 81.8s
+  Train Loss: 0.0077 | Val Loss: 0.3192 | Val Acc: 93.81%
+[Epoch 15/20] Batch 0 Loss: 0.0003
+[Epoch 15/20] Batch 20 Loss: 0.0017
+[Epoch 15/20] Batch 40 Loss: 0.0003
+[Epoch 15/20] Batch 60 Loss: 0.0003
+[Epoch 15/20] Batch 80 Loss: 0.0045
+[Epoch 15/20] Batch 100 Loss: 0.0002
+[Epoch 15/20] Batch 120 Loss: 0.0008
+[Epoch 15/20] Batch 140 Loss: 0.0003
+[Epoch 15/20] Batch 160 Loss: 0.0020
+[Epoch 15/20] Batch 180 Loss: 0.0012
+[Epoch 15/20] Batch 200 Loss: 0.0002
+[Epoch 15/20] Batch 220 Loss: 0.0002
+Epoch 15/20 done in 81.2s
+  Train Loss: 0.0028 | Val Loss: 0.3333 | Val Acc: 93.81%
+[Epoch 16/20] Batch 0 Loss: 0.0431
+[Epoch 16/20] Batch 20 Loss: 0.0004
+[Epoch 16/20] Batch 40 Loss: 0.0019
+[Epoch 16/20] Batch 60 Loss: 0.0004
+[Epoch 16/20] Batch 80 Loss: 0.0084
+[Epoch 16/20] Batch 100 Loss: 0.0036
+[Epoch 16/20] Batch 120 Loss: 0.0002
+[Epoch 16/20] Batch 140 Loss: 0.0005
+[Epoch 16/20] Batch 160 Loss: 0.0007
+[Epoch 16/20] Batch 180 Loss: 0.0003
+[Epoch 16/20] Batch 200 Loss: 0.0011
+[Epoch 16/20] Batch 220 Loss: 0.0003
+Epoch 16/20 done in 81.2s
+  Train Loss: 0.0107 | Val Loss: 0.3162 | Val Acc: 94.23%
+[Epoch 17/20] Batch 0 Loss: 0.0002
+[Epoch 17/20] Batch 20 Loss: 0.0001
+[Epoch 17/20] Batch 40 Loss: 0.0006
+[Epoch 17/20] Batch 60 Loss: 0.0006
+[Epoch 17/20] Batch 80 Loss: 0.0007
+[Epoch 17/20] Batch 100 Loss: 0.0026
+[Epoch 17/20] Batch 120 Loss: 0.0006
+[Epoch 17/20] Batch 140 Loss: 0.0011
+[Epoch 17/20] Batch 160 Loss: 0.0039
+[Epoch 17/20] Batch 180 Loss: 0.0567
+[Epoch 17/20] Batch 200 Loss: 0.1435
+[Epoch 17/20] Batch 220 Loss: 0.0022
+Epoch 17/20 done in 81.0s
+  Train Loss: 0.0183 | Val Loss: 0.3270 | Val Acc: 93.60%
+[Epoch 18/20] Batch 0 Loss: 0.0004
+[Epoch 18/20] Batch 20 Loss: 0.0008
+[Epoch 18/20] Batch 40 Loss: 0.0012
+[Epoch 18/20] Batch 60 Loss: 0.0126
+[Epoch 18/20] Batch 80 Loss: 0.0011
+[Epoch 18/20] Batch 100 Loss: 0.0013
+[Epoch 18/20] Batch 120 Loss: 0.0109
+[Epoch 18/20] Batch 140 Loss: 0.0019
+[Epoch 18/20] Batch 160 Loss: 0.0014
+[Epoch 18/20] Batch 180 Loss: 0.0578
+[Epoch 18/20] Batch 200 Loss: 0.0015
+[Epoch 18/20] Batch 220 Loss: 0.0083
+Epoch 18/20 done in 81.4s
+  Train Loss: 0.0118 | Val Loss: 0.3362 | Val Acc: 94.54%
+[Epoch 19/20] Batch 0 Loss: 0.0009
+[Epoch 19/20] Batch 20 Loss: 0.0011
+[Epoch 19/20] Batch 40 Loss: 0.0254
+[Epoch 19/20] Batch 60 Loss: 0.0005
+[Epoch 19/20] Batch 80 Loss: 0.0003
+[Epoch 19/20] Batch 100 Loss: 0.0026
+[Epoch 19/20] Batch 120 Loss: 0.0413
+[Epoch 19/20] Batch 140 Loss: 0.0008
+[Epoch 19/20] Batch 160 Loss: 0.0004
+[Epoch 19/20] Batch 180 Loss: 0.0067
+[Epoch 19/20] Batch 200 Loss: 0.0789
+[Epoch 19/20] Batch 220 Loss: 0.0002
+Epoch 19/20 done in 81.0s
+  Train Loss: 0.0106 | Val Loss: 0.3173 | Val Acc: 94.86%
+Saved new best model: models/convnext_best.pt
+[Epoch 20/20] Batch 0 Loss: 0.0001
+[Epoch 20/20] Batch 20 Loss: 0.0003
+[Epoch 20/20] Batch 40 Loss: 0.0010
+[Epoch 20/20] Batch 60 Loss: 0.0058
+[Epoch 20/20] Batch 80 Loss: 0.0021
+[Epoch 20/20] Batch 100 Loss: 0.0005
+[Epoch 20/20] Batch 120 Loss: 0.0004
+[Epoch 20/20] Batch 140 Loss: 0.0012
+[Epoch 20/20] Batch 160 Loss: 0.1090
+[Epoch 20/20] Batch 180 Loss: 0.0239
+[Epoch 20/20] Batch 200 Loss: 0.0003
+[Epoch 20/20] Batch 220 Loss: 0.0004
+Epoch 20/20 done in 81.1s
+  Train Loss: 0.0161 | Val Loss: 0.3561 | Val Acc: 93.70%
+Training complete.
+
+Running final test evaluation...
+[TEST] Loss: 0.2984, Accuracy: 94.65%
+Best validation accuracy was 94.86% (saved at models/convnext_best.pt)
+
+Job 2863592 consumed 8.7 billing hours from project ec12.
+
+Submitted 2026-01-05T15:18:23; waited 1.0 seconds in the queue after becoming eligible to run.
+
+Requested wallclock time: 4.0 hours
+Elapsed wallclock time:   27.5 minutes
+
+Job exited normally.
+
+Task and CPU statistics:
+ID             CPUs  Tasks  CPU util                Start   Elapsed  Exit status
+2863592           4            0.0 %  2026-01-05T15:18:24  1650.0 s  0
+2863592.batch     4      1    33.3 %  2026-01-05T15:18:24  1650.0 s  0
+
+Used CPU time:   36.7 CPU minutes
+Unused CPU time: 1.2 CPU hours
+
+Memory statistics, in GiB:
+ID              Alloc   Usage
+2863592          32.0        
+2863592.batch    32.0     2.2
+
+Job 2863592 completed at Mon Jan 5 15:45:54 CET 2026
