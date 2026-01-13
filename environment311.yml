@@ -33,7 +33,6 @@ dependencies:
       - bleach==6.3.0
       - boto3==1.40.50
       - botocore==1.40.71
-      - brisque==0.0.17
       - certifi==2025.10.5
       - cffi==2.0.0
       - charset-normalizer==3.4.4

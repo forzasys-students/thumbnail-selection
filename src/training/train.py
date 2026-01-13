@@ -30,10 +30,6 @@ def get_model(model_name: str, num_classes: int):
         model = models.vit_b_16(weights="IMAGENET1K_V1")
         model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
 
-    elif model_name == "r3d":
-        model = models.video.r3d_18(weights="KINETICS400_V1")
-        model.fc = nn.Linear(model.fc.in_features, num_classes)
-
     elif model_name == "convnext":
         model = models.convnext_base(weights="IMAGENET1K_V1")
         model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
@@ -42,10 +38,10 @@ def get_model(model_name: str, num_classes: int):
         model = models.efficientnet_b3(weights="IMAGENET1K_V1")
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
 
-    elif model_name == "yoloclass":
-        from ultralytics import YOLO
-        model = YOLO("yolov8n-cls.pt")
-        model.model[-1] = nn.Linear(model.model[-1].in_features, num_classes)
+    #elif model_name == "yoloclass":
+    #    from ultralytics import YOLO
+    #    model = YOLO("yolov8n-cls.pt")
+    #    model.model[-1] = nn.Linear(model.model[-1].in_features, num_classes)
 
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -56,7 +52,7 @@ def get_model(model_name: str, num_classes: int):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default="resnet18",
-                        choices=["resnet18", "resnet50", "vit", "r3d", "convnext", "efficientnet", "yoloclass"])
+                        choices=["resnet18", "resnet50", "vit", "convnext", "efficientnet"]) #yoloclass
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-4)

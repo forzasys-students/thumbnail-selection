@@ -53,5 +53,5 @@ document.addEventListener('keydown', function(event) {
 function downloadAll() {
     alert('Download all functionality would require server-side zip creation. Implementation depends on your requirements.');
     // TODO: Implement actual download functionality
-    // You could create a Flask route that zips all images and sends them
+    // Maybe create a Flask route that zips all images and sends them
 }
