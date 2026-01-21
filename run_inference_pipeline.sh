@@ -75,8 +75,8 @@ fi
 echo "[STEP 3] Extracting segments..."
 python src/inference/extract_priority_segments.py \
     --pred_csv "$PRED_CSV" \
-    --min_length 3 \
-    --min_segments_per_clip 20 \
+    --min_length 5 \
+    --min_segments_per_clip 10 \
     --copy_dir "$SEG_DIR" \
     --output_csv "$SEG_CSV" 2>&1
 

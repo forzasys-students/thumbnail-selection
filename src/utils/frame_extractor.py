@@ -153,7 +153,7 @@ def extract_adaptive_frames(
     return saved_paths
 
 
-def extract_frames_from_clip(video_path, output_dir, fps_target=1):
+def extract_frames_from_clip(video_path, output_dir, fps_target=5):
     """
     Extract frames from a single video clip at a fixed temporal rate.
     Args:

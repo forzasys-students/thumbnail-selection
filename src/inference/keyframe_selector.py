@@ -1,322 +1,242 @@
+# keyframe_selector.py
 """
 SOTA KEYFRAME SELECTION PIPELINE
-Integrates: YOLO11-Pose + InsightFace + MUSIQ (pyiqa)
 
-Uses hierarchical priorities from segments.csv:
-- P1A_closeup
-- P1B_closeup
-- P2_main_camera
-- P3_public
+What this file does (high level):
+1) Load frame-level predictions (pred_csv) + segment ranges (seg_csv)
+2) For each segment:
+   A) Cheap preprocessing filters to remove obviously bad frames
+   B) TEMPORAL diversity filter (saves YOLO calls on near-duplicates)
+   C) Logo detection filter to remove branded frames
+   D) Heavy SOTA signals (pose/face/celebration) on the reduced set
+   E) MUSIQ (heavy IQA) only on the per-segment top-k (ACTUALLY batched now)
+   F) Compute final score and keep only strong candidates
+3) Global selection across all segments using quotas + time-gap constraint
+4) Save selected keyframes and a CSV with score breakdown
+
+Uses closeup-specific priorities from segments.csv:
+- P1_player_referee - BEST thumbnails
+- P2_corner - Set pieces
+- P3_side_staff - Coach reactions
+- P4_behind_goal - Goalkeeper shots
 """
 
-import os
+from __future__ import annotations
+from sota_models import SOTAModels, LogoDetector
+
+import os, sys
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+import time
+from typing import Dict, List
+
 import cv2
 import numpy as np
 import pandas as pd
-import torch
 from tqdm import tqdm
 
-from ultralytics import YOLO
-from insightface.app import FaceAnalysis
-import pyiqa
+# -----------------------
+# Preprocessing utilities 
+# -----------------------
+from preprocess import (
+    extract_frame_index,        # parse frame index from "frame_00123.jpg"
+    transition_overlay_score,   # proxy: rejects "too flat/overlay-ish" frames via stddev
+    blur_laplacian_var,         # blur metric: Laplacian variance (higher = sharper)
+    mean_luminance,             # mean Y channel, rejects dark frames
+    texture_proxy,              # edge density proxy, rejects uniform/flat frames
+    detect_and_mask_cuts,       # detects shot cuts using mean abs diff on downscaled gray
+)
 
 
+# =============================================================================
+# CONFIG (tuning knobs)
+# =============================================================================
+
+# Segment-specific multiplier: boosts or penalizes final score by segment type.
+# Purpose: create clear ranking between closeup types for thumbnails.
+# Spread out more than before (1.50 vs 1.25 vs 1.10 vs 1.00) for better differentiation.
 SEGMENT_SCORE_MULT = {
-    "P1A_closeup": 1.45,
-    "P1B_closeup": 1.10,
-    "P2_main_camera": 1.05,
-    "P3_public": 0.70,
+    "P1_player_referee": 1.30,   # Highest - action/emotion shots (best thumbnails)
+    "P2_corner": 1.20,           # High - set pieces, tactical moments
+    "P3_side_staff": 1.10,       # Medium - coach reactions, bench celebrations
+    "P4_behind_goal": 1.00,      # Baseline - goalkeeper shots, different angle
 }
 
+# Global quota fractions: ensures variety across closeup types.
+# Example with top_n=10:
+# - P1 gets ~5 frames, P2 ~3 frames, P3 ~1 frame, P4 ~1 frame (depending on rounding).
 SEGMENT_QUOTA_FRAC = {
-    "P1A_closeup": 0.50,
-    "P1B_closeup": 0.15,
-    "P2_main_camera": 0.25,
-    "P3_public": 0.10,
+    "P1_player_referee": 0.60,   # 60% from player/referee closeups
+    "P2_corner": 0.20,           # 20% from corner closeups
+    "P3_side_staff": 0.10,       # 10% from staff/bench closeups
+    "P4_behind_goal": 0.10,      # 10% from behind-goal closeups
 }
 
+# Segment-specific thresholds for filtering.
+# These are used in:
+# - cheap stage: min_sharpness / min_luma / min_texture
+# - heavy stage: min_closeup_ratio (pose-based)
+# - IQA stage: min_musiq_norm (only used as a soft gate for P1)
 QUALITY_THRESHOLDS = {
-    "P1A_closeup": {
-        "min_sharpness": 30,
-        "min_closeup_ratio": 0.10,
-        "min_musiq_norm": 0.55,   # soft gate only for P1A
+    "P1_player_referee": {
+        "min_sharpness": 15,          
+        "min_closeup_ratio": 0.25,    
+        "min_musiq_norm": 0.50,       # Relaxed from 0.55 (soft gate only for P1)
+        "min_luma": 30.0,             
+        "min_texture": 6.0,         
     },
-    "P1B_closeup": {
-        "min_sharpness": 28,
-        "min_closeup_ratio": 0.06,
-        "min_musiq_norm": 0.0,
+    "P2_corner": {
+        "min_sharpness": 15,          
+        "min_closeup_ratio": 0.10,    
+        "min_musiq_norm": 0.0,        
+        "min_luma": 28.0,
+        "min_texture": 5.0,
     },
-    "P2_main_camera": {
-        "min_sharpness": 25,
-        "min_closeup_ratio": 0.025,
+    "P3_side_staff": {
+        "min_sharpness": 15,
+        "min_closeup_ratio": 0.10,   
         "min_musiq_norm": 0.0,
+        "min_luma": 25.0,
+        "min_texture": 4.0,
     },
-    "P3_public": {
-        "min_sharpness": 20,
-        "min_closeup_ratio": 0.01,
+    "P4_behind_goal": {
+        "min_sharpness": 15,
+        "min_closeup_ratio": 0.10,    
         "min_musiq_norm": 0.0,
-    }
+        "min_luma": 25.0,
+        "min_texture": 4.0,
+    },
 }
 
+# Cut detection parameters:
+# - CUT_DIFF_THRESHOLD: how large the mean abs diff spike must be to count as a cut
+# - CUT_DROP_RADIUS: drop +/- N extracted frames around the cut boundary
+CUT_DIFF_THRESHOLD = 55.0
+CUT_DROP_RADIUS = 1
+
+# Diversity reduction parameters:
+# - PRE_DIVERSITY_MULT: keep_k * this many frames before heavy scoring
+# - MIN_DIVERSITY_DISTANCE: cosine distance threshold; larger => stricter diversity
+PRE_DIVERSITY_MULT = 5
+MIN_DIVERSITY_DISTANCE = 0.18
+
+# Per-segment how many frames we want to keep AFTER heavy scoring but BEFORE MUSIQ.
+# Note: MUSIQ runs only on this top-k (per segment), which saves runtime.
+# Increased for all types compared to old version for better variety.
 PER_SEGMENT_KEEP = {
-    "P1A_closeup": 6,
-    "P1B_closeup": 6,
-    "P2_main_camera": 10,
-    "P3_public": 10,
+    "P1_player_referee": 12,  
+    "P2_corner": 10,          
+    "P3_side_staff": 8,       
+    "P4_behind_goal": 8,      
 }
 
+# Final scoring weights: these sum to ~1.0.
+# They define how much each signal contributes to "score_pre_mult" before segment multiplier.
 WEIGHTS = {
-    "content": 0.40,
-    "musiq": 0.25,
-    "sharp": 0.12,
-    "composition": 0.10,
-    "saturation": 0.08,
-    "confidence": 0.05,
+    "content": 0.40,       # face/celebration/closeup (depends on keyframe_priority)
+    "musiq": 0.25,         # IQA
+    "sharp": 0.15,         # blur-derived sharp_norm 
 }
 
-# Hard floors for anything that ends up in final keyframes
-MIN_FINAL_CONF = 0.60
-MIN_FINAL_SCORE = 0.60
+# Hard floors: frame must pass these to be eligible for final selection.
+MIN_FINAL_CONF = 0.70
+MIN_FINAL_SCORE = 0.50
 
+# If quota selection can't fill top_n (common when filters are strict),
+# allow a slightly lower score floor while keeping confidence unchanged.
+ALLOW_SCORE_FLOOR_FALLBACK = True
+FALLBACK_MIN_FINAL_SCORE = 0.50
 
-# Optional: keep quotas from collapsing if a bucket is empty after filtering
-ALLOW_SCORE_FLOOR_FALLBACK = True   # if True, will relax score floor slightly if needed
-FALLBACK_MIN_FINAL_SCORE = 0.50     # only used if quotas can't fill
+# Temporal diversity gap of frames BEFORE heavy stage
+TEMPORAL_DIVERSITY_GAP = 8  # frames must be 15+ apart before heavy models
+MIN_FRAME_GAP = 20          # frames must be 20+ apart in final selection
 
+# Logo detection parameters
+LOGO_CKPT_PATH = "models/logo/logo_sef_2024_resnet50.pth"
+LOGO_THRESHOLD = 0.50   # logo presence threshold
+LOGO_BATCH_SIZE = 32
 
+#YOLO_PATH = "models/yolo/yolo11m-pose.pt"
 
-def extract_frame_index(path: str) -> int:
-    return int("".join(c for c in os.path.basename(path) if c.isdigit()))
+# =============================================================================
+# Temporal diversity filter (runs BEFORE heavy stage)
+# =============================================================================
 
+def temporal_diversity_filter_greedy(items: List[dict], min_gap: int) -> List[dict]:
+    """
+    Greedy selection ensuring min_gap between frames, but picking best available.
+    
+    Better than current implementation because:
+    - Considers all frames, not just first in sorted order
+    - Picks locally optimal choices given constraints
+    """
+    if not items:
+        return []
+    
+    # Sort by quality (best first)
+    sorted_by_quality = sorted(
+        items,
+        key=lambda x: (x["model_confidence"], x["sharpness"], x["luma"]),
+        reverse=True
+    )
+    
+    selected = []
+    selected_indices = set()
+    
+    for item in sorted_by_quality:
+        idx = extract_frame_index(item["path"])
+        
+        # Check if this frame conflicts with already selected frames
+        conflict = False
+        for sel_idx in selected_indices:
+            if abs(idx - sel_idx) < min_gap:
+                conflict = True
+                break
+        
+        if not conflict:
+            selected.append(item)
+            selected_indices.add(idx)
+    
+    # Return in temporal order for consistency
+    return sorted(selected, key=lambda x: extract_frame_index(x["path"]))
 
-# =======================
-# CHEAP METRICS
-# =======================
+# =============================================================================
+# QUOTA SELECTION (global stage)
+# =============================================================================
 
-def transition_overlay_score(path: str) -> float:
-    img = cv2.imread(path)
-    if img is None:
-        return 0.0
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    return float(cv2.meanStdDev(gray)[1][0][0])
+def _quota_select(all_candidates: List[dict], top_n: int, min_frame_gap: int = MIN_FRAME_GAP) -> List[dict]:
+    """
+    Select final keyframes across all segments using:
+    1) Bucket quotas based on SEGMENT_QUOTA_FRAC
+    2) Within each bucket: pick highest final_score first
+    3) Enforce temporal diversity: avoid frames too close in time (min_frame_gap in frame indices)
 
+    Inputs
+    ------
+    all_candidates: list of candidates from all segments (already scored + filtered)
+    top_n: total number of keyframes to output
+    min_frame_gap: minimum distance between selected frames (in extracted frame indices)
 
-def blur_laplacian_var(path: str) -> float:
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        return 0.0
-    return float(cv2.Laplacian(img, cv2.CV_64F).var())
-
-
-def composition_score(path: str) -> float:
-    img = cv2.imread(path)
-    if img is None:
-        return 0.0
-
-    h, w = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-
-    h_third = h // 3
-    w_third = w // 3
-    pts = [(w_third, h_third), (2*w_third, h_third), (w_third, 2*h_third), (2*w_third, 2*h_third)]
-
-    total = 0.0
-    for (px, py) in pts:
-        radius = int(min(w, h) * 0.1)
-        y1, y2 = max(0, py - radius), min(h, py + radius)
-        x1, x2 = max(0, px - radius), min(w, px + radius)
-        region = edges[y1:y2, x1:x2]
-        if region.size:
-            total += float(np.sum(region) / (region.size * 255.0))
-
-    return float(min(total / 4.0, 1.0))
-
-
-def saturation_score(path: str) -> float:
-    img = cv2.imread(path)
-    if img is None:
-        return 0.0
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    return float(np.mean(hsv[:, :, 1])) / 255.0
-
-
-# =======================
-# State Of The Art Models
-# =======================
-
-class SOTAModels:
-    def __init__(
-        self,
-        device: str = "cuda",
-        yolo_pose_path: str = "models/yolo/yolo11m-pose.pt",
-        insightface_name: str = "buffalo_l",
-    ):
-        self.device = device if torch.cuda.is_available() and device.startswith("cuda") else "cpu"
-
-        self.pose_model = YOLO(yolo_pose_path)
-
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.device.startswith("cuda") else ["CPUExecutionProvider"]
-        self.face_app = FaceAnalysis(name=insightface_name, providers=providers)
-        ctx_id = 0 if self.device.startswith("cuda") else -1
-        self.face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
-
-        self.musiq = pyiqa.create_metric("musiq", device=self.device)
-
-    def closeup_ratio_from_pose(self, path: str) -> float:
-        try:
-            r = self.pose_model(path, verbose=False)[0]
-            if r.boxes is None or len(r.boxes) == 0:
-                return 0.0
-            h, w = r.orig_shape[:2]
-            img_area = float(h * w)
-            best = 0.0
-            for b in r.boxes.xyxy:
-                x1, y1, x2, y2 = map(float, b.tolist())
-                area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-                best = max(best, area / img_area)
-            return float(best)
-        except Exception:
-            return 0.0
-
-    def celebration_detection(self, path: str):
-        try:
-            res = self.pose_model(path, verbose=False)[0]
-        except Exception:
-            return 0.0, "none"
-
-        if res.keypoints is None or len(res.keypoints) == 0:
-            return 0.0, "none"
-
-        num_people = len(res.keypoints)
-        best_score = 0.0
-        best_type = "none"
-
-        for det in res.keypoints:
-            kps = det.xy[0]
-            if kps is None or len(kps) < 17:
-                continue
-
-            ls, rs = kps[5], kps[6]
-            lw, rw = kps[9], kps[10]
-            lh, rh = kps[11], kps[12]
-            lk, rk = kps[13], kps[14]
-
-            shoulder_y = float((ls[1] + rs[1]) / 2.0)
-            hip_y = float((lh[1] + rh[1]) / 2.0)
-            torso_h = abs(hip_y - shoulder_y)
-            if torso_h <= 1e-6:
-                continue
-
-            left_arm = (shoulder_y - float(lw[1])) / torso_h
-            right_arm = (shoulder_y - float(rw[1])) / torso_h
-            avg_arm = (left_arm + right_arm) / 2.0
-
-            shoulder_w = abs(float(rs[0] - ls[0]))
-            wrist_w = abs(float(rw[0] - lw[0]))
-            spread = (wrist_w / shoulder_w) if shoulder_w > 1e-6 else 0.0
-
-            jumping = (float(lk[1]) < hip_y - torso_h * 0.3) or (float(rk[1]) < hip_y - torso_h * 0.3)
-            both_arms_up = (left_arm > 0.4) and (right_arm > 0.4)
-
-            if jumping and avg_arm > 0.4:
-                score, typ = 1.0, "jumping_celebration"
-            elif both_arms_up and spread > 1.3:
-                score, typ = 0.95, "full_celebration"
-            elif both_arms_up:
-                score, typ = 0.8, "arms_raised"
-            elif (left_arm > 0.2) or (right_arm > 0.2):
-                score, typ = 0.5, "partial_celebration"
-            else:
-                score, typ = 0.0, "none"
-
-            conf = getattr(det, "conf", None)
-            if conf is not None:
-                try:
-                    conf_arr = conf[0].detach().cpu().numpy()
-                    valid = conf_arr[conf_arr > 0]
-                    if valid.size:
-                        score *= float(np.mean(valid))
-                except Exception:
-                    pass
-
-            if score > best_score:
-                best_score = float(score)
-                best_type = typ
-
-        if num_people >= 2 and best_score > 0.5:
-            best_score = min(best_score + min(num_people * 0.15, 0.3), 1.0)
-            best_type = f"group_{best_type}"
-
-        return float(best_score), str(best_type)
-
-    def face_quality(self, path: str):
-        img = cv2.imread(path)
-        if img is None:
-            return 0, 0.0, 0.0, 0.0
-
-        faces = self.face_app.get(img)
-        if not faces:
-            return 0, 0.0, 0.0, 0.0
-
-        h, w = img.shape[:2]
-        img_area = float(h * w)
-        cx, cy = w / 2.0, h / 2.0
-
-        largest = 0.0
-        best_q = 0.0
-        best_det = 0.0
-
-        for f in faces:
-            x1, y1, x2, y2 = map(float, f.bbox.tolist())
-            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-            largest = max(largest, area)
-
-            size_score = min(area / (img_area * 0.3), 1.0)
-            fx, fy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            dist = np.sqrt((fx - cx) ** 2 + (fy - cy) ** 2)
-            max_dist = np.sqrt(cx**2 + cy**2)
-            pos_score = 1.0 - float(dist / max_dist)
-
-            det_score = float(getattr(f, "det_score", 0.5))
-            best_det = max(best_det, det_score)
-
-            q = (0.40 * size_score) + (0.30 * pos_score) + (0.30 * det_score)
-            best_q = max(best_q, float(q))
-
-        num = int(len(faces))
-        multi_bonus = min(num * 0.1, 0.3)
-        final_q = min(best_q + multi_bonus, 1.0)
-
-        return num, float(largest), float(final_q), float(best_det)
-
-    def musiq_norm(self, path: str) -> float:
-        try:
-            s = self.musiq(path)
-            if hasattr(s, "item"):
-                s = float(s.item())
-            s = float(s)
-            return float(np.clip(s / 100.0, 0.0, 1.0))
-        except Exception:
-            return 0.5
-
-
-# =======================
-# QUOTA SELECT
-# =======================
-
-def _quota_select(all_candidates, top_n, min_frame_gap=10):
+    Output
+    ------
+    final list of candidates (<= top_n)
+    """
+    # Bucket candidates by segment priority.
     buckets = {k: [] for k in SEGMENT_QUOTA_FRAC.keys()}
     for c in all_candidates:
         sp = c.get("segment_priority", None)
         if sp in buckets:
             buckets[sp].append(c)
 
+    # Sort each bucket by best score first.
     for sp in buckets:
         buckets[sp] = sorted(buckets[sp], key=lambda x: x["final_score"], reverse=True)
 
+    # Compute integer quotas by floor, then distribute remaining slots round-robin.
     keys = list(SEGMENT_QUOTA_FRAC.keys())
-    quotas = {}
+    quotas: Dict[str, int] = {}
     remaining = top_n
 
     for sp in keys:
@@ -330,10 +250,15 @@ def _quota_select(all_candidates, top_n, min_frame_gap=10):
         remaining -= 1
         i += 1
 
-    final = []
+    final: List[dict] = []
     used = set()
 
-    def add(sorted_list, need):
+    def add(sorted_list: List[dict], need: int) -> int:
+        """
+        Add up to `need` frames from sorted_list into final, respecting:
+        - no duplicates by path
+        - min_frame_gap constraint against already selected frames
+        """
         nonlocal final
         added = 0
         for cand in sorted_list:
@@ -342,11 +267,15 @@ def _quota_select(all_candidates, top_n, min_frame_gap=10):
             if cand["path"] in used:
                 continue
 
+            # Frame index parsed from filename; used for time-gap filtering.
             ci = extract_frame_index(cand["path"])
+
+            # Check distance to already-selected frames.
+            # Enforce min_frame_gap for temporal diversity.
             ok = True
             for s in final:
                 si = extract_frame_index(s["path"])
-                if abs(ci - si) < min_frame_gap:
+                if abs(ci - si) < MIN_FRAME_GAP:
                     ok = False
                     break
             if not ok:
@@ -357,110 +286,302 @@ def _quota_select(all_candidates, top_n, min_frame_gap=10):
             added += 1
         return added
 
+    # First pass: fill quotas bucket by bucket.
     for sp in keys:
         add(buckets[sp], quotas[sp])
 
+    # Second pass: if still short, fill from best overall (still respecting gap).
     if len(final) < top_n:
         overall = sorted(all_candidates, key=lambda x: x["final_score"], reverse=True)
         add(overall, top_n - len(final))
-
-    if len(final) < top_n:
-        overall = sorted(all_candidates, key=lambda x: x["final_score"], reverse=True)
-        for c in overall:
-            if len(final) >= top_n:
-                break
-            if c["path"] in used:
-                continue
-            final.append(c)
-            used.add(c["path"])
-
+    
     return final
 
 
-# =======================
-# MAIN
-# =======================
+# =============================================================================
+# MAIN PIPELINE ENTRYPOINT
+# =============================================================================
 
 def select_keyframes(
-    pred_csv,
-    seg_csv,
-    output_csv,
-    output_dir,
-    top_n=15,
-    device="cuda",
-    yolo_pose_path="models/yolo/yolo11m-pose.pt",
+    pred_csv: str,
+    seg_csv: str,
+    output_csv: str,
+    output_dir: str,
+    top_n: int = 10,
+    device: str = "cuda",
+    yolo_pose_path: str = "models/yolo/yolo11m-pose.pt",
+    debug: bool = True,
 ):
-    models = SOTAModels(device=device, yolo_pose_path=yolo_pose_path)
+    """
+    This is the main selection stage (STEP 4 in your pipeline).
 
+    It expects:
+    - pred_csv: per-frame classifier output (frame_path, predicted label, confidence, etc.)
+    - seg_csv: segment table produced earlier (segment_id, start_frame, end_frame, priority)
+
+    It produces:
+    - output_dir: image files of selected keyframes
+    - output_csv: CSV with keyframes + full score breakdown per selected frame
+
+    """
+
+    # ---- Load heavy models ONCE (expensive startup) ----
+    print("Initializing heavy models")
+    models = SOTAModels(device=device, yolo_pose_path=yolo_pose_path, debug=debug)
+
+    # ---- Load logo detection model ----
+    logo_det = LogoDetector(LOGO_CKPT_PATH, device=device)
+
+    # ---- Load CSV inputs ----
     df_preds = pd.read_csv(pred_csv)
     df_segs = pd.read_csv(seg_csv)
+
+    # Parse frame index from frame filename so we can do segment slicing + time-gap checks.
     df_preds["frame_index"] = df_preds["frame_path"].apply(extract_frame_index)
+
+    # Ensure output directory exists.
     os.makedirs(output_dir, exist_ok=True)
 
+    # ---- Analytics: counters and timing so you can tell what is happening ----
     analytics = {
-        "frames_processed": 0,
-        "frames_filtered_overlay": 0,
-        "frames_filtered_blur": 0,
-        "frames_filtered_closeup": 0,
-        "segments_empty_after_prefilter": 0,
-        "p1a_failed_musiq_gate_fallbacks": 0,
+        "frames_processed": 0,            # after confidence gate (MIN_FINAL_CONF)
+        "frames_dropped_cutmask": 0,      # dropped around detected cuts
+        "frames_filtered_conf": 0,        # dropped by classifier confidence
+        "frames_filtered_overlay": 0,     # dropped by overlay proxy threshold
+        "frames_filtered_blur": 0,        # dropped by sharpness threshold
+        "frames_filtered_luma": 0,        # dropped by darkness threshold
+        "frames_filtered_texture": 0,     # dropped by texture (uniformity) threshold
+        "frames_filtered_temporal": 0,    # dropped by temporal diversity BEFORE heavy stage
+        "frames_filtered_closeup": 0,     # dropped by pose-derived closeup threshold
+        "segments_empty_after_prefilter": 0,  # segments that become empty after early filtering
+        "p1_failed_musiq_gate_fallbacks": 0, # how often P1 needed MUSIQ fallback
         "candidates_by_segment_type": {
-            "P1A_closeup": 0,
-            "P1B_closeup": 0,
-            "P2_main_camera": 0,
-            "P3_public": 0
+            "P1_player_referee": 0,
+            "P2_corner": 0,
+            "P3_side_staff": 0,
+            "P4_behind_goal": 0
         },
+        "timing": {
+            "preprocess_sec": 0.0,        # cheap stage
+            "temporal_diversity_sec": 0.0,# temporal filter before heavy stage
+            "sota_heavy_sec": 0.0,        # pose/face/celebration
+            "musiq_sec": 0.0,             # MUSIQ only 
+            "scoring_sec": 0.0,           # final scoring + hard floors
+        }
     }
 
-    all_candidates = []
+    # Global pool of candidates (after all segment processing).
+    all_candidates: List[dict] = []
 
-    print(f"\n{'='*60}")
-    print("SOTA KEYFRAME SELECTION (YOLO11 + InsightFace + MUSIQ) — HIERARCHICAL")
-    print(f"Processing {len(df_segs)} segments")
+    print(f"{'='*60}")
+    print("CLOSEUP-ONLY KEYFRAME SELECTION")
+    print(f"Processing {len(df_segs)} closeup segments")
     print(f"{'='*60}\n")
 
+    # =============================================================================
+    # Iterate over segments (this is where most work happens)
+    # =============================================================================
     for _, seg in tqdm(df_segs.iterrows(), total=len(df_segs), desc="Processing segments"):
+        # Segment id from segments.csv
         seg_id = int(seg["segment_id"])
-        seg_priority = str(seg.get("priority", "P2_main_camera"))
 
+        # Priority label from closeup hierarchy (P1/P2/P3/P4).
+        seg_priority = str(seg.get("priority", "P1_player_referee"))
+
+        # Segment multiplier to boost/penalize final score.
         seg_mult = float(SEGMENT_SCORE_MULT.get(seg_priority, 1.0))
-        th = QUALITY_THRESHOLDS.get(seg_priority, QUALITY_THRESHOLDS["P2_main_camera"])
+
+        # Thresholds specific to that segment type.
+        th = QUALITY_THRESHOLDS.get(seg_priority, QUALITY_THRESHOLDS["P1_player_referee"])
+
+        # Per-segment limit for how many candidates go to MUSIQ/scoring.
         keep_k = int(PER_SEGMENT_KEEP.get(seg_priority, 6))
 
+        # Segment frame range (paths contain frame indices in their filename).
         start = extract_frame_index(seg["start_frame"])
         end = extract_frame_index(seg["end_frame"])
+
+        # Slice predictions to only frames within this segment.
         segment_frames = df_preds[(df_preds.frame_index >= start) & (df_preds.frame_index <= end)]
 
-        candidates = []
+        if debug:
+            print("\n" + "-" * 72)
+            print(f"[SEGMENT] id={seg_id} priority={seg_priority} frames_in_range={len(segment_frames)}")
+            print(f"[SEGMENT] start_idx={start} end_idx={end} keep_k={keep_k} mult={seg_mult}")
+            print("-" * 72)
+
+        # ---------------------------------------------------------------------
+        # STAGE 1: PREPROCESSING
+        # Goal: remove bad frames cheaply before you run any heavy networks.
+        # ---------------------------------------------------------------------
+        if debug:
+            print("[PREPROCESS] >>> Stage 1: cut-mask + cheap filters (overlay/blur/luma/texture/conf)")
+
+        t_pre = time.time()
+
+        # Sort paths by time so cut detection makes sense (diff between consecutive frames).
+        seg_paths = sorted(segment_frames["frame_path"].tolist(), key=extract_frame_index)
+
+        # Detect cut boundaries and mark +/- radius frames to drop.
+        cut_drop = detect_and_mask_cuts(
+            seg_paths,
+            diff_thresh=CUT_DIFF_THRESHOLD,
+            drop_radius=CUT_DROP_RADIUS
+        )
+
+        pre_items: List[dict] = []
         for _, row in segment_frames.iterrows():
             path = row["frame_path"]
-            model_conf = float(row.get("confidence", 0.5))
-            # HARD GATE: model confidence
-            if model_conf < MIN_FINAL_CONF:
+
+            # 1) Drop frames near cuts (these are often blurred/transition frames).
+            if path in cut_drop:
+                analytics["frames_dropped_cutmask"] += 1
                 continue
+
+            # 2) Classifier confidence gate:
+            # If the shot-type classifier isn't confident, don't waste compute on it.
+            model_conf = float(row.get("confidence", 0.5))
+            if model_conf < MIN_FINAL_CONF:
+                analytics["frames_filtered_conf"] += 1
+                continue
+
+            # From here onward, we consider it "processed".
             analytics["frames_processed"] += 1
 
+            # 3) Overlay / transition proxy:
+            # Uses gray stddev heuristic to reject flat/overlay frames.
             overlay = transition_overlay_score(path)
             if overlay < 18:
                 analytics["frames_filtered_overlay"] += 1
                 continue
 
+            # 4) Blur test: Laplacian variance.
             lap = blur_laplacian_var(path)
             if lap < th["min_sharpness"]:
                 analytics["frames_filtered_blur"] += 1
                 continue
 
+            # 5) Darkness test: mean luminance.
+            luma = mean_luminance(path)
+            if luma < float(th.get("min_luma", 0.0)):
+                analytics["frames_filtered_luma"] += 1
+                continue
+
+            # 6) Uniformity test: texture proxy (edge density).
+            tex = texture_proxy(path)
+            if tex < float(th.get("min_texture", 0.0)):
+                analytics["frames_filtered_texture"] += 1
+                continue
+
+            # If it passes all cheap filters, keep it for the next stage.
+            pre_items.append({
+                "path": path,
+                "segment_id": seg_id,
+                "segment_priority": seg_priority,
+                "segment_mult": seg_mult,
+                "model_confidence": model_conf,
+                "sharpness": float(lap),         # laplacian variance
+                "luma": float(luma),
+                "texture": float(tex),
+            })
+
+        analytics["timing"]["preprocess_sec"] += (time.time() - t_pre)
+
+        if debug:
+            print(f"[PREPROCESS] <<< Stage 1 done: kept={len(pre_items)} / processed={len(segment_frames)} "
+                  f"(cut_drop={len(cut_drop)})")
+
+        # If nothing survives cheap filters, segment contributes nothing.
+        if not pre_items:
+            analytics["segments_empty_after_prefilter"] += 1
+            if debug:
+                print("[PREPROCESS] !!! Segment empty after cheap filters. Skipping segment.")
+            continue
+
+        # ---------------------------------------------------------------------
+        # STAGE 2A: TEMPORAL DIVERSITY
+        # Goal: Remove temporally close frames BEFORE running heavy models.
+        # ---------------------------------------------------------------------
+        if debug:
+            print(f"[TEMPORAL] >>> Stage 2A: temporal diversity (gap={TEMPORAL_DIVERSITY_GAP})")
+
+        t_temp = time.time()
+        before_temporal = len(pre_items)
+
+        # Apply temporal filter - frames must be at least TEMPORAL_DIVERSITY_GAP apart
+        pre_items = temporal_diversity_filter_greedy(pre_items, TEMPORAL_DIVERSITY_GAP)
+        analytics["frames_filtered_temporal"] += (before_temporal - len(pre_items))
+        analytics["timing"]["temporal_diversity_sec"] += (time.time() - t_temp)
+
+        if debug:
+            print(f"[TEMPORAL] <<< {before_temporal} -> {len(pre_items)} (saved {before_temporal - len(pre_items)} YOLO calls!)")
+
+        if not pre_items:
+            continue
+
+
+        # ---------------------------------------------------------------------
+        # STAGE 2B : LOGO DETECTION FILTER
+        # Goal: remove frames with prominent logos/branding.
+        # ---------------------------------------------------------------------
+        before_logo = len(pre_items)
+        paths = [it["path"] for it in pre_items]
+
+        try:
+            logo_probs = logo_det.predict_logo_prob(paths, batch_size=LOGO_BATCH_SIZE)
+        except Exception as e:
+            if debug:
+                print(f"[LOGO] ERROR: Logo detection failed: {e}")
+                print(f"[LOGO] Skipping logo filter, keeping all {before_logo} frames")
+            logo_probs = [0.0] * len(paths)
+
+        kept = []
+        for it, p in zip(pre_items, logo_probs):
+            it["logo_prob"] = float(p)
+                        
+            if p >= LOGO_THRESHOLD:
+                 continue
+                        
+            kept.append(it)
+
+        pre_items = kept
+        after_logo = len(pre_items)
+
+        if debug:
+            print(f"[LOGO] <<< Stage 2C logo: {before_logo} -> {after_logo} (thr={LOGO_THRESHOLD})")
+            if before_logo > 0:
+                avg_prob = sum(logo_probs) / len(logo_probs)
+                print(f"[LOGO] Average logo prob: {avg_prob:.3f}")
+
+        # ---------------------------------------------------------------------
+        # STAGE 3: SOTA HEAVY SIGNALS
+        # Goal: compute semantic signals:
+        # - closeup ratio from pose boxes
+        # - faces + face quality
+        # - celebration cue from pose 
+        # ---------------------------------------------------------------------
+        if debug:
+            print("[SOTA] >>> Stage 3: HEAVY scoring signals (pose closeup, face, celebration)")
+
+        t_sota = time.time()
+
+        candidates: List[dict] = []
+        for it in pre_items:
+            path = it["path"]
+            
             closeup = models.closeup_ratio_from_pose(path)
             if closeup < th["min_closeup_ratio"]:
                 analytics["frames_filtered_closeup"] += 1
                 continue
 
-            # heavy-ish but still acceptable here (you already do this)
             num_faces, face_area, face_q, face_det = models.face_quality(path)
+            
             celebration, cel_type = models.celebration_detection(path)
-            comp = composition_score(path)
-            sat = saturation_score(path)
 
+            # keyframe_priority defines what "content" means for this frame:
+            # 1 = face-driven thumbnail candidate (highest priority)
+            # 2 = celebration-driven candidate
+            # 3 = closeup-driven candidate (fallback)
             if num_faces > 0:
                 kf_priority = 1
                 rank_value = face_area
@@ -476,7 +597,7 @@ def select_keyframes(
                 "segment_id": seg_id,
                 "segment_priority": seg_priority,
                 "segment_mult": seg_mult,
-                "model_confidence": model_conf,
+                "model_confidence": it["model_confidence"],
 
                 "keyframe_priority": int(kf_priority),
                 "rank_value": float(rank_value),
@@ -490,30 +611,61 @@ def select_keyframes(
                 "celebration_type": str(cel_type),
 
                 "closeup": float(closeup),
-                "sharpness": float(lap),
+                "sharpness": float(it["sharpness"]),
 
-                "composition": float(comp),
-                "saturation": float(sat),
             })
+
+        analytics["timing"]["sota_heavy_sec"] += (time.time() - t_sota)
+
+        if debug:
+            print(f"[SOTA] <<< Stage 3 done: candidates_after_pose/face/celebration={len(candidates)}")
 
         if not candidates:
             analytics["segments_empty_after_prefilter"] += 1
+            if debug:
+                print("[SOTA] !!! No candidates survived heavy stage. Skipping segment.")
             continue
 
-        # top-k per segment (cheap-first philosophy preserved)
-        candidates_sorted = sorted(candidates, key=lambda x: (x["keyframe_priority"], -x["rank_value"]))[:keep_k]
+        # Per-segment top-k BEFORE MUSIQ:
+        # Sort by keyframe_priority (1 best) then rank_value (descending).
+        candidates_sorted = sorted(
+            candidates,
+            key=lambda x: (x["keyframe_priority"], -x["rank_value"])
+        )[:keep_k]
 
-        # MUSIQ computed only on these
-        for c in candidates_sorted:
-            c["musiq_norm"] = models.musiq_norm(c["path"])
+        if debug:
+            print(f"[SELECT] Segment top-k before MUSIQ: {len(candidates_sorted)} (keep_k={keep_k})")
+
+        # ---------------------------------------------------------------------
+        # STAGE 4: MUSIQ 
+        # Goal: compute IQA only on the already-reduced per-segment top-k.
+        # ---------------------------------------------------------------------
+        if debug:
+            print("[IQA] >>> Stage 4: BATCHED MUSIQ on segment top-k")
+
+        t_m = time.time()
+        
+        musiq_paths = [c["path"] for c in candidates_sorted]
+        musiq_scores = models.musiq_norm_batch(musiq_paths)
+        
+        for c, score in zip(candidates_sorted, musiq_scores):
+            c["musiq_norm"] = score
             c["quality_fallback"] = 0
 
-        # Soft MUSIQ gate ONLY for P1A (but never delete segment)
-        if seg_priority == "P1A_closeup":
+        analytics["timing"]["musiq_sec"] += (time.time() - t_m)
+
+        if debug:
+            print(f"[IQA] <<< Batched {len(musiq_scores)} in {time.time() - t_m:.2f}s")
+
+        # P1 MUSIQ soft gate:
+        # Only P1 uses a quality gate; BUT you never delete the entire segment.
+        # If all fail, you keep the best 2 anyway (fallback) so P1 doesn't go empty.
+        if seg_priority == "P1_player_referee":
             gated = [c for c in candidates_sorted if c["musiq_norm"] >= th["min_musiq_norm"]]
             if not gated:
-                analytics["p1a_failed_musiq_gate_fallbacks"] += 1
-                # fallback: keep best 2 based on your content proxy + sharpness
+                analytics["p1_failed_musiq_gate_fallbacks"] += 1
+                if debug:
+                    print("[IQA] !!! P1 MUSIQ gate failed for all. Using fallback: keep best 2 by priority/rank/sharp.")
                 candidates_sorted = sorted(
                     candidates_sorted,
                     key=lambda x: (x["keyframe_priority"], -x["rank_value"], -x["sharpness"])
@@ -522,31 +674,103 @@ def select_keyframes(
                     c["quality_fallback"] = 1
             else:
                 candidates_sorted = gated
+                if debug:
+                    print(f"[IQA] P1 MUSIQ gate passed: kept {len(candidates_sorted)}")
 
-        # scoring + HARD FLOORS (do NOT mutate list while iterating)
-        scored = []
+        # ---------------------------------------------------------------------
+        # STAGE 5: FINAL SCORE + HARD FLOORS
+        # Goal: compute score_pre_mult (0..1-ish), multiply by segment_mult, and keep only strong frames.
+        # ---------------------------------------------------------------------
+        if debug:
+            print("[SCORING] >>> Stage 5: final_score + hard floors")
+
+        t_sc = time.time()
+
+        # Sigmoid-compressed sharpness normalization
+        sharp_vals = [c["sharpness"] for c in candidates_sorted]
+        if len(sharp_vals) >= 2:
+            sharp_p50 = float(np.percentile(sharp_vals, 50))
+            sharp_p95 = float(np.percentile(sharp_vals, 95))
+            sharp_range = max(sharp_p95 - sharp_p50, 1.0)  # Avoid div-by-zero
+        else:
+            sharp_p50 = 100.0
+            sharp_range = 100.0
+
+        scored: List[dict] = []
         for c in candidates_sorted:
+
+            # ---------- CONTENT SIGNAL (depends on keyframe_priority) ----------
+            # Build 3 separate semantic signals, then mix based on priority.
+
+            # ---------- BUILD 3 SEMANTIC SIGNALS (face / celebration / closeup) ----------
+            
+            # Face signal: NO single-face penalty. Quality is primary, extra faces add bonus.
+            face_signal = 0.0
+            if int(c.get("num_faces", 0)) > 0:
+                face_q = float(c.get("face_quality", 0.0))
+                nfaces = int(c.get("num_faces", 0))
+
+                face_contrib = 0.95 * face_q  # Tune to make face quality more or less important
+                multi_bonus = 0.05 * min((nfaces - 1) / 5.0, 1.0) if nfaces > 1 else 0.0
+                face_signal = float(np.clip(face_contrib + multi_bonus, 0.0, 1.0))
+
+            cele_signal = float(np.clip(c.get("celebration", 0.0), 0.0, 1.0))
+            close_signal = float(np.clip(c.get("closeup", 0.0), 0.0, 1.0))
+
+            # ---------- PRIORITY-BASED MIX (primary + secondary boosts) ----------
+            # Priority still matters, but faces can help even in priority 2/3.
             if c["keyframe_priority"] == 1:
-                content_signal = (0.60 * c["face_quality"]) + (0.40 * min(c["num_faces"] / 6.0, 1.0))
+                content_src = "face"
+                # face primary, celebration can add a bit (celebrating face == strong thumbnail)
+                content_signal = 0.95 * face_signal + 0.05 * cele_signal
             elif c["keyframe_priority"] == 2:
-                content_signal = c["celebration"]
+                content_src = "celebration"
+                # celebration, but faces should still lift it
+                content_signal = 0.30 * cele_signal + 0.70 * face_signal
             else:
-                content_signal = c["closeup"]
+                content_src = "closeup"
+                # closeup, but faces can help otherwise boring closeups
+                content_signal = 0.40 * close_signal + 0.60 * face_signal
 
-            sharp_norm = float(np.clip(c["sharpness"] / 200.0, 0.0, 1.0))
+            content_signal = float(np.clip(content_signal, 0.0, 1.0))
 
-            score_pre = (
-                WEIGHTS["content"] * float(np.clip(content_signal, 0.0, 1.0)) +
-                WEIGHTS["musiq"] * float(np.clip(c["musiq_norm"], 0.0, 1.0)) +
-                WEIGHTS["sharp"] * sharp_norm +
-                WEIGHTS["composition"] * float(np.clip(c["composition"], 0.0, 1.0)) +
-                WEIGHTS["saturation"] * float(np.clip(c["saturation"], 0.0, 1.0)) +
-                WEIGHTS["confidence"] * float(np.clip(c["model_confidence"], 0.0, 1.0))
-            )
+            # ---------- NORMALIZE OTHER FEATURES ----------
 
+            # Sigmoid compression: expands top region, no saturation
+            z = (c["sharpness"] - sharp_p50) / sharp_range  # Center at median, scale by p50→p95
+            sharp_norm = float(1.0 / (1.0 + np.exp(-2.5 * z)))  # Sigmoid with slope=2.5
+           
+            musiq_val = float(np.clip(c.get("musiq_norm", 0.0), 0.0, 1.0))
+
+            # ---------- WEIGHTED CONTRIBUTIONS ----------
+            w_content = WEIGHTS["content"] * content_signal
+            w_musiq   = WEIGHTS["musiq"] * musiq_val
+            w_sharp   = WEIGHTS["sharp"] * sharp_norm
+
+            score_pre = w_content + w_musiq + w_sharp 
+
+            # ---------- FINAL SCORE ----------
             c["final_score"] = float(score_pre * c["segment_mult"])
 
-            # HARD FLOORS
+            # ---------- STORE BREAKDOWN FOR CSV ----------
+            # Extra useful debug columns (optional but recommended)
+            c["face_signal"] = float(face_signal)
+            c["cele_signal"] = float(cele_signal)
+            c["close_signal"] = float(close_signal)
+
+            c["content_source"] = content_src
+            c["content_signal"] = content_signal
+            c["sharp_norm"] = sharp_norm
+
+            c["w_content"] = w_content
+            c["w_musiq"]   = w_musiq
+            c["w_sharp"]   = w_sharp
+            c["score_pre_mult"] = score_pre
+
+            # ---------- HARD FLOORS ----------
+            # A frame is only eligible if:
+            # - confidence is above MIN_FINAL_CONF
+            # - final_score is above MIN_FINAL_SCORE
             if c["model_confidence"] < MIN_FINAL_CONF:
                 continue
             if c["final_score"] < MIN_FINAL_SCORE:
@@ -554,125 +778,188 @@ def select_keyframes(
 
             scored.append(c)
 
-        candidates_sorted = scored
-        if not candidates_sorted:
+        analytics["timing"]["scoring_sec"] += (time.time() - t_sc)
+
+        if debug:
+            print(f"[SCORING] <<< Stage 5 done: kept={len(scored)} after hard floors "
+                  f"(MIN_CONF={MIN_FINAL_CONF}, MIN_SCORE={MIN_FINAL_SCORE})")
+
+        if not scored:
+            if debug:
+                print("[SCORING] !!! No candidates survived scoring floors. Skipping segment.")
             continue
 
-
+        # Track how many candidates per segment type survived into the global pool.
         if seg_priority in analytics["candidates_by_segment_type"]:
-            analytics["candidates_by_segment_type"][seg_priority] += len(candidates_sorted)
+            analytics["candidates_by_segment_type"][seg_priority] += len(scored)
 
-        all_candidates.extend(candidates_sorted)
+        all_candidates.extend(scored)
 
+    # =============================================================================
+    # Global finalize: quotas + time gap + fallback fill + save outputs
+    # =============================================================================
     if not all_candidates:
         print("[WARN] No candidates found. Prefilters too strict or model paths failing.")
         pd.DataFrame([]).to_csv(output_csv, index=False)
         return
 
-    final_selection = _quota_select(all_candidates, top_n=top_n, min_frame_gap=10)
-    # FINAL HARD FILTER (quota can't override this)
+    print("\n" + "=" * 72)
+    print(f"[FINAL] >>> Global selection from {len(all_candidates)} candidates")
+    print("=" * 72)
+
+    # Quota-based selection + min_frame_gap constraint.
+    final_selection = _quota_select(all_candidates, top_n=top_n, min_frame_gap=MIN_FRAME_GAP)
+
+    # Final hard filter (quota cannot override confidence/score).
     final_selection = [
         c for c in final_selection
         if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
         and float(c.get("final_score", 0.0)) >= MIN_FINAL_SCORE
-    ]   
+    ]
 
+    # Optional fallback fill if strict score floor caused quota to under-fill.
     if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
-        # Relax ONLY score floor a bit, but NEVER relax confidence
+        print(f"[FINAL] Quota could not fill {top_n}. Trying fallback score floor {FALLBACK_MIN_FINAL_SCORE} (conf unchanged).")
         extra = sorted(
-            [c for c in all_candidates
-            if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
-            and float(c.get("final_score", 0.0)) >= FALLBACK_MIN_FINAL_SCORE
-            and c not in final_selection],
+            [
+                c for c in all_candidates
+                if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
+                and float(c.get("final_score", 0.0)) >= FALLBACK_MIN_FINAL_SCORE
+                and c not in final_selection
+            ],
             key=lambda x: x["final_score"],
             reverse=True
         )
+        
+        # Still enforce min_frame_gap even in fallback
         for c in extra:
             if len(final_selection) >= top_n:
                 break
-            final_selection.append(c)
+            
+            # Check temporal gap against already selected frames
+            ci = extract_frame_index(c["path"])
+            ok = True
+            for s in final_selection:
+                si = extract_frame_index(s["path"])
+                if abs(ci - si) < 5:  # Use same min_frame_gap as _quota_select
+                    ok = False
+                    break
+            
+            if ok:
+                final_selection.append(c)
 
+    print(f"[FINAL] <<< Selected: {len(final_selection)} / {top_n}\n")
 
-
-    # Save
+    # -----------------------------------------------------------------------------
+    # Save selected images + write final CSV.
+    # The CSV includes all the individual score contributions so you can debug:
+    # - content_source tells you what "content" was (face/celebration/closeup)
+    # - w_* columns show EXACT boost amounts inside score_pre_mult
+    # -----------------------------------------------------------------------------
     results = []
     for rank, c in enumerate(final_selection):
-        kf_label = f"P{c['keyframe_priority']}"
         pr = c.get("segment_priority", "NA")
         conf = float(c.get("model_confidence", 0.0))
         score = float(c.get("final_score", 0.0))
 
-        out_path = os.path.join(
-            output_dir,
-            f"rank{rank+1:02d}_{pr}_conf{conf:.2f}_score{score:.3f}.jpg"
-        )
+        out_path = os.path.join(output_dir, f"rank{rank+1:02d}_{pr}_conf{conf:.2f}_score{score:.3f}.jpg")
 
         img = cv2.imread(c["path"])
         if img is not None:
             cv2.imwrite(out_path, img)
 
         results.append({
-            "rank": rank + 1,
-            "segment_id": c["segment_id"],
-            "segment_priority": pr,
-            "segment_multiplier": round(float(c["segment_mult"]), 3),
-            "keyframe_priority": int(c["keyframe_priority"]),
-            "model_confidence": round(conf, 3),
-            "final_score": round(score, 3),
+            # --- identity / ranking ---
+            "rank": rank + 1,  # Final rank after global quota selection and time-gap filtering
+            "segment_id": c["segment_id"],  # Temporal segment ID this frame was selected from
+            "segment_priority": pr,  # Semantic segment class (P1 player/referee, P2 corner, P3 staff, P4 behind goal)
+            "segment_multiplier": round(c["segment_mult"], 3),  # Hierarchy boost applied to the score (higher = more important)
 
-            "celebration": round(float(c["celebration"]), 3),
-            "celebration_type": c["celebration_type"],
+            # --- content decision ---
+            "keyframe_priority": int(c["keyframe_priority"]),          # Which semantic signal dominated: 1=face, 2=celebration, 3=closeup fallback
+            "content_source": c.get("content_source", "NA"),           # Human-interpretable: face / celebration / closeup
+            "content_signal": round(c.get("content_signal", 0.0), 3),  # Normalized [0,1] semantic strength of chosen content signal
 
-            "num_faces": int(c["num_faces"]),
-            "face_quality": round(float(c["face_quality"]), 3),
-            "face_det_score": round(float(c["face_det_score"]), 3),
+            # --- final score ---
+            "final_score": round(score, 3),     # Final ranking score = score_pre_mult × segment_multiplier
+            "score_pre_mult": round(c.get("score_pre_mult", 0.0), 4),     # Raw weighted score before applying segment hierarchy multiplier
 
-            "closeup": round(float(c["closeup"]), 3),
-            "sharpness": round(float(c["sharpness"]), 3),
-            "composition": round(float(c["composition"]), 3),
-            "saturation": round(float(c["saturation"]), 3),
+            # --- weighted contributions (these SUM to score_pre_mult) ---
+            "w_content": round(c.get("w_content", 0.0), 4),     # Contribution from semantic importance (faces / celebration / closeup)
+            "w_musiq": round(c.get("w_musiq", 0.0), 4),         # Contribution from MUSIQ image quality assessment
+            "w_sharp": round(c.get("w_sharp", 0.0), 4),         # Contribution from Laplacian-based sharpness (percentile-normalized)
 
-            "musiq_norm": round(float(c.get("musiq_norm", 0.0)), 3),
-            "quality_fallback": int(c.get("quality_fallback", 0)),
+            # --- normalized raw signals ---
+            "musiq_norm": round(c.get("musiq_norm", 0.0), 3),     # Normalized MUSIQ score [0,1]
+            "sharp_norm": round(c.get("sharp_norm", 0.0), 3),     # Normalized sharpness [0,1] (percentile-based, no saturation)
+            "model_confidence": round(conf, 3),                   # Classifier confidence for this frame
 
-            "input_path": c["path"],
-            "saved_path": out_path
+            # --- semantic context ---
+            "celebration": round(c.get("celebration", 0.0), 3),     # Pose-based celebration probability
+            "celebration_type": c.get("celebration_type", "none"),  # Category: partial, group, full, none
+            "num_faces": int(c.get("num_faces", 0)),                # Number of detected faces
+            "face_quality": round(c.get("face_quality", 0.0), 3),   # Combined face quality score (size, centering, detection confidence)
+
+            # --- bookkeeping ---
+            "quality_fallback": int(c.get("quality_fallback", 0)),     # Flag: MUSIQ gate fallback was used
+            "input_path": c["path"],     # Original extracted frame path
+            "saved_path": out_path,     # Output path of selected keyframe image
+
         })
+
 
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_csv, index=False)
 
-    # Analytics
+    # -----------------------------------------------------------------------------
+    # Print analytics summary
+    # This tells if preprocessing + SOTA stages are actually filtering anything.
+    # -----------------------------------------------------------------------------
     print(f"\n{'='*60}")
     print("ANALYTICS")
     print(f"{'='*60}")
-    print(f"Frames processed: {analytics['frames_processed']}")
-    print(f"Filtered overlay: {analytics['frames_filtered_overlay']}")
-    print(f"Filtered blur: {analytics['frames_filtered_blur']}")
-    print(f"Filtered closeup: {analytics['frames_filtered_closeup']}")
-    print(f"Segments empty after prefilter: {analytics['segments_empty_after_prefilter']}")
-    print(f"P1A MUSIQ gate fallbacks used: {analytics['p1a_failed_musiq_gate_fallbacks']}")
-    print("\nCandidates by segment type:")
+    print(f"Frames processed (after conf gate): {analytics['frames_processed']}")
+    print(f"Dropped by cut-mask:              {analytics['frames_dropped_cutmask']}")
+    print(f"Filtered by conf (<{MIN_FINAL_CONF}):        {analytics['frames_filtered_conf']}")
+    print(f"Filtered overlay:                {analytics['frames_filtered_overlay']}")
+    print(f"Filtered blur:                   {analytics['frames_filtered_blur']}")
+    print(f"Filtered luma:                   {analytics['frames_filtered_luma']}")
+    print(f"Filtered texture:                {analytics['frames_filtered_texture']}")
+    print(f"Filtered temporal                {analytics['frames_filtered_temporal']}")
+    print(f"Filtered closeup (pose):         {analytics['frames_filtered_closeup']}")
+    print(f"Segments empty after prefilter:  {analytics['segments_empty_after_prefilter']}")
+    print(f"P1 MUSIQ gate fallbacks used:    {analytics['p1_failed_musiq_gate_fallbacks']}")
+    print("\nCandidates by closeup type:")
     for k, v in analytics["candidates_by_segment_type"].items():
         print(f"  {k}: {v}")
+
+    print("\nTiming breakdown:")
+    for k, v in analytics["timing"].items():
+        print(f"  {k}: {v:.2f}s")
 
     print(f"\nSaved {len(results_df)} keyframes -> {output_csv}")
     print(f"{'='*60}\n")
 
 
+# =============================================================================
+# CLI entrypoint
+# =============================================================================
 if __name__ == "__main__":
     import argparse
 
+    # Command-line interface for running this module directly.
     parser = argparse.ArgumentParser(description="Keyframe Selection")
-    parser.add_argument("--pred_csv", required=True)
-    parser.add_argument("--seg_csv", required=True)
-    parser.add_argument("--output_csv", required=True)
-    parser.add_argument("--output_dir", required=True)
-    parser.add_argument("--top_n", type=int, default=15)
-    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--pred_csv", required=True)        # predictions file (per frame)
+    parser.add_argument("--seg_csv", required=True)         # segment ranges + priorities
+    parser.add_argument("--output_csv", required=True)      # output CSV path
+    parser.add_argument("--output_dir", required=True)      # where to save keyframe images
+    parser.add_argument("--top_n", type=int, default=10)    # total output keyframes
+    parser.add_argument("--device", type=str, default="cuda")  # cuda or cpu
     parser.add_argument("--yolo_pose_path", type=str, default="models/yolo/yolo11m-pose.pt")
+    parser.add_argument("--debug", action="store_true", help="Verbose stage prints inside segments")
     args = parser.parse_args()
 
+    # Run the selection.
     select_keyframes(
         pred_csv=args.pred_csv,
         seg_csv=args.seg_csv,
@@ -681,4 +968,5 @@ if __name__ == "__main__":
         top_n=args.top_n,
         device=args.device,
         yolo_pose_path=args.yolo_pose_path,
+        debug=args.debug,
     )
