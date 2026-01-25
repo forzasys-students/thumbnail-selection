@@ -57,6 +57,11 @@ def get_model(model_name, num_classes, weights_path):
         model = models.efficientnet_b0(weights=None)
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
 
+    elif model_name == "yoloclass":
+        from ultralytics import YOLO
+        model = YOLO("yolov8n-cls.pt")
+        model.model[-1] = nn.Linear(model.model[-1].in_features, num_classes)
+
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
@@ -156,6 +161,7 @@ def main():
     plt.ylabel("True Label")
     plt.title(f"Confusion Matrix - {args.model_name.upper()}")
     plt.tight_layout()
+    #plt.savefig(f"confusion_matrix_{args.model_name}.png")
 
     # Additional: Precision-Recall and F1-Recall curves
     y_true = np.array(all_labels)
