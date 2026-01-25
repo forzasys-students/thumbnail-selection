@@ -17,3 +17,5 @@ inference_outputs/
 
 # Models
 #*.pt
+models_history/
+oldmodels/
