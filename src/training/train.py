@@ -35,7 +35,7 @@ def get_model(model_name: str, num_classes: int):
         model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
 
     elif model_name == "efficientnet":
-        model = models.efficientnet_b3(weights="IMAGENET1K_V1")
+        model = models.efficientnet_b0(weights="IMAGENET1K_V1")
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
 
     #elif model_name == "yoloclass":

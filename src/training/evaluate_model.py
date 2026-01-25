@@ -54,7 +54,7 @@ def get_model(model_name, num_classes, weights_path):
         model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
 
     elif model_name == "efficientnet":
-        model = models.efficientnet_b3(weights=None)
+        model = models.efficientnet_b0(weights=None)
         model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
 
     else:
