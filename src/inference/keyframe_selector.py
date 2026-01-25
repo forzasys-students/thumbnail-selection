@@ -44,9 +44,9 @@ from preprocess import (
     extract_frame_index,        # parse frame index from "frame_00123.jpg"
     transition_overlay_score,   # proxy: rejects "too flat/overlay-ish" frames via stddev
     blur_laplacian_var,         # blur metric: Laplacian variance (higher = sharper)
-    mean_luminance,             # mean Y channel, rejects dark frames
     texture_proxy,              # edge density proxy, rejects uniform/flat frames
     detect_and_mask_cuts,       # detects shot cuts using mean abs diff on downscaled gray
+    motion_blur_score,          # motion blur detection using gradient variance ratio
 )
 
 
@@ -76,36 +76,32 @@ SEGMENT_QUOTA_FRAC = {
 
 # Segment-specific thresholds for filtering.
 # These are used in:
-# - cheap stage: min_sharpness / min_luma / min_texture
+# - cheap stage: min_sharpness / min_motion_blur / min_texture
 # - heavy stage: min_closeup_ratio (pose-based)
 # - IQA stage: min_musiq_norm (only used as a soft gate for P1)
 QUALITY_THRESHOLDS = {
     "P1_player_referee": {
         "min_sharpness": 15,          
-        "min_closeup_ratio": 0.25,    
-        "min_musiq_norm": 0.50,       # Relaxed from 0.55 (soft gate only for P1)
-        "min_luma": 30.0,             
+        "min_closeup_ratio": 0.10,    
+        "min_musiq_norm": 0.40,       # Relaxed from 0.55 (soft gate only for P1)
         "min_texture": 6.0,         
     },
     "P2_corner": {
         "min_sharpness": 15,          
-        "min_closeup_ratio": 0.10,    
+        "min_closeup_ratio": 0.00,    
         "min_musiq_norm": 0.0,        
-        "min_luma": 28.0,
         "min_texture": 5.0,
     },
     "P3_side_staff": {
         "min_sharpness": 15,
         "min_closeup_ratio": 0.10,   
         "min_musiq_norm": 0.0,
-        "min_luma": 25.0,
         "min_texture": 4.0,
     },
     "P4_behind_goal": {
         "min_sharpness": 15,
-        "min_closeup_ratio": 0.10,    
+        "min_closeup_ratio": 0.00,    
         "min_musiq_norm": 0.0,
-        "min_luma": 25.0,
         "min_texture": 4.0,
     },
 }
@@ -113,14 +109,8 @@ QUALITY_THRESHOLDS = {
 # Cut detection parameters:
 # - CUT_DIFF_THRESHOLD: how large the mean abs diff spike must be to count as a cut
 # - CUT_DROP_RADIUS: drop +/- N extracted frames around the cut boundary
-CUT_DIFF_THRESHOLD = 55.0
-CUT_DROP_RADIUS = 1
-
-# Diversity reduction parameters:
-# - PRE_DIVERSITY_MULT: keep_k * this many frames before heavy scoring
-# - MIN_DIVERSITY_DISTANCE: cosine distance threshold; larger => stricter diversity
-PRE_DIVERSITY_MULT = 5
-MIN_DIVERSITY_DISTANCE = 0.18
+CUT_DIFF_THRESHOLD = 80.0
+CUT_DROP_RADIUS = 0
 
 # Per-segment how many frames we want to keep AFTER heavy scoring but BEFORE MUSIQ.
 # Note: MUSIQ runs only on this top-k (per segment), which saves runtime.
@@ -132,92 +122,114 @@ PER_SEGMENT_KEEP = {
     "P4_behind_goal": 8,      
 }
 
-# Final scoring weights: these sum to ~1.0.
-# They define how much each signal contributes to "score_pre_mult" before segment multiplier.
-WEIGHTS = {
-    "content": 0.40,       # face/celebration/closeup (depends on keyframe_priority)
-    "musiq": 0.25,         # IQA
-    "sharp": 0.15,         # blur-derived sharp_norm 
-}
-
 # Hard floors: frame must pass these to be eligible for final selection.
 MIN_FINAL_CONF = 0.70
-MIN_FINAL_SCORE = 0.50
+MIN_FINAL_SCORE = 0.30
 
 # If quota selection can't fill top_n (common when filters are strict),
 # allow a slightly lower score floor while keeping confidence unchanged.
 ALLOW_SCORE_FLOOR_FALLBACK = True
-FALLBACK_MIN_FINAL_SCORE = 0.50
+FALLBACK_MIN_FINAL_SCORE = 0.20
 
 # Temporal diversity gap of frames BEFORE heavy stage
-TEMPORAL_DIVERSITY_GAP = 8  # frames must be 15+ apart before heavy models
-MIN_FRAME_GAP = 20          # frames must be 20+ apart in final selection
+TEMPORAL_DIVERSITY_GAP = 5  # 2 seconds - avoid running YOLO on same action
+
+# Final selection (global, output quality)
+MIN_FRAME_GAP = 15          # 5 seconds - viewers see distinct moments
 
 # Logo detection parameters
 LOGO_CKPT_PATH = "models/logo/logo_sef_2024_resnet50.pth"
 LOGO_THRESHOLD = 0.50   # logo presence threshold
 LOGO_BATCH_SIZE = 32
 
+K_PER_WINDOW = 5   # try 2, then 3 if still starving
+
 #YOLO_PATH = "models/yolo/yolo11m-pose.pt"
+
+def normalize_weights(weights: dict) -> dict:
+    total = sum(weights.values())
+    return {k: v/total for k, v in weights.items()}
+
+# Final scoring weights: these sum to ~1.0.
+# They define how much each signal contributes to "score_pre_mult" before segment multiplier.
+WEIGHTS = normalize_weights({
+    "content": 0.40,       # face/celebration/closeup (depends on keyframe_priority)
+    "musiq": 0.20,         # IQA
+    "sharp": 0.15,         # blur-derived sharp_norm 
+})
 
 # =============================================================================
 # Temporal diversity filter (runs BEFORE heavy stage)
 # =============================================================================
-
-def temporal_diversity_filter_greedy(items: List[dict], min_gap: int) -> List[dict]:
+def temporal_diversity_filter_sliding_window(
+    items: List[dict],
+    window_size: int,
+    k_per_window: int = 2,
+) -> List[dict]:
     """
-    Greedy selection ensuring min_gap between frames, but picking best available.
-    
-    Better than current implementation because:
-    - Considers all frames, not just first in sorted order
-    - Picks locally optimal choices given constraints
+    Non-overlapping windows. Keep top-K per window by a cheap quality proxy.
     """
     if not items:
         return []
-    
-    # Sort by quality (best first)
-    sorted_by_quality = sorted(
-        items,
-        key=lambda x: (x["model_confidence"], x["sharpness"], x["luma"]),
-        reverse=True
-    )
-    
+
+    sorted_by_time = sorted(items, key=lambda x: extract_frame_index(x["path"]))
     selected = []
-    selected_indices = set()
-    
-    for item in sorted_by_quality:
-        idx = extract_frame_index(item["path"])
-        
-        # Check if this frame conflicts with already selected frames
-        conflict = False
-        for sel_idx in selected_indices:
-            if abs(idx - sel_idx) < min_gap:
-                conflict = True
+    i = 0
+
+    while i < len(sorted_by_time):
+        window_start_idx = extract_frame_index(sorted_by_time[i]["path"])
+
+        window = []
+        j = i
+        while j < len(sorted_by_time):
+            frame_idx = extract_frame_index(sorted_by_time[j]["path"])
+            if frame_idx < window_start_idx + window_size:
+                window.append(sorted_by_time[j])
+                j += 1
+            else:
                 break
-        
-        if not conflict:
-            selected.append(item)
-            selected_indices.add(idx)
-    
-    # Return in temporal order for consistency
-    return sorted(selected, key=lambda x: extract_frame_index(x["path"]))
+
+        if window:
+            # Sort window by cheap quality (same keys you used before)
+            window_sorted = sorted(
+                window,
+                key=lambda x: (
+                    x["model_confidence"],
+                    x["sharpness"],
+                    x["texture"],
+                    x["motion_blur"],
+                ),
+                reverse=True,
+            )
+            selected.extend(window_sorted[:max(1, int(k_per_window))])
+
+        i = j
+
+    # Optional: de-dup in case of weird overlaps (shouldn’t happen, but safe)
+    seen = set()
+    out = []
+    for it in selected:
+        if it["path"] not in seen:
+            out.append(it)
+            seen.add(it["path"])
+    return out
+
+
 
 # =============================================================================
 # QUOTA SELECTION (global stage)
 # =============================================================================
 
-def _quota_select(all_candidates: List[dict], top_n: int, min_frame_gap: int = MIN_FRAME_GAP) -> List[dict]:
+def _quota_select(all_candidates: List[dict], top_n: int) -> List[dict]:
     """
     Select final keyframes across all segments using:
     1) Bucket quotas based on SEGMENT_QUOTA_FRAC
     2) Within each bucket: pick highest final_score first
-    3) Enforce temporal diversity: avoid frames too close in time (min_frame_gap in frame indices)
 
     Inputs
     ------
     all_candidates: list of candidates from all segments (already scored + filtered)
     top_n: total number of keyframes to output
-    min_frame_gap: minimum distance between selected frames (in extracted frame indices)
 
     Output
     ------
@@ -307,7 +319,7 @@ def select_keyframes(
     seg_csv: str,
     output_csv: str,
     output_dir: str,
-    top_n: int = 10,
+    top_n: int = 15,
     device: str = "cuda",
     yolo_pose_path: str = "models/yolo/yolo11m-pose.pt",
     debug: bool = True,
@@ -349,8 +361,8 @@ def select_keyframes(
         "frames_filtered_conf": 0,        # dropped by classifier confidence
         "frames_filtered_overlay": 0,     # dropped by overlay proxy threshold
         "frames_filtered_blur": 0,        # dropped by sharpness threshold
-        "frames_filtered_luma": 0,        # dropped by darkness threshold
         "frames_filtered_texture": 0,     # dropped by texture (uniformity) threshold
+        "frames_filtered_motion_blur": 0,  # dropped by motion blur threshold
         "frames_filtered_temporal": 0,    # dropped by temporal diversity BEFORE heavy stage
         "frames_filtered_closeup": 0,     # dropped by pose-derived closeup threshold
         "segments_empty_after_prefilter": 0,  # segments that become empty after early filtering
@@ -362,11 +374,11 @@ def select_keyframes(
             "P4_behind_goal": 0
         },
         "timing": {
-            "preprocess_sec": 0.0,        # cheap stage
-            "temporal_diversity_sec": 0.0,# temporal filter before heavy stage
-            "sota_heavy_sec": 0.0,        # pose/face/celebration
-            "musiq_sec": 0.0,             # MUSIQ only 
-            "scoring_sec": 0.0,           # final scoring + hard floors
+            "preprocess_sec": 0.0,          # cheap stage
+            "temporal_diversity_sec": 0.0,  # temporal filter before heavy stage
+            "sota_heavy_sec": 0.0,          # pose/face/celebration
+            "musiq_sec": 0.0,               # MUSIQ only 
+            "scoring_sec": 0.0,             # final scoring + hard floors
         }
     }
 
@@ -415,7 +427,7 @@ def select_keyframes(
         # Goal: remove bad frames cheaply before you run any heavy networks.
         # ---------------------------------------------------------------------
         if debug:
-            print("[PREPROCESS] >>> Stage 1: cut-mask + cheap filters (overlay/blur/luma/texture/conf)")
+            print("[PREPROCESS] >>> Stage 1: cut-mask + cheap filters (overlay/blur/texture/conf)")
 
         t_pre = time.time()
 
@@ -461,16 +473,16 @@ def select_keyframes(
                 analytics["frames_filtered_blur"] += 1
                 continue
 
-            # 5) Darkness test: mean luminance.
-            luma = mean_luminance(path)
-            if luma < float(th.get("min_luma", 0.0)):
-                analytics["frames_filtered_luma"] += 1
-                continue
-
-            # 6) Uniformity test: texture proxy (edge density).
+            # 5) Uniformity test: texture proxy (edge density).
             tex = texture_proxy(path)
             if tex < float(th.get("min_texture", 0.0)):
                 analytics["frames_filtered_texture"] += 1
+                continue
+
+            # 6) Motion blur test: motion blur score.
+            motion_blur = motion_blur_score(path)
+            if motion_blur < 0.70:  # Tune this (0.45 = moderate threshold)
+                analytics["frames_filtered_motion_blur"] += 1
                 continue
 
             # If it passes all cheap filters, keep it for the next stage.
@@ -481,8 +493,8 @@ def select_keyframes(
                 "segment_mult": seg_mult,
                 "model_confidence": model_conf,
                 "sharpness": float(lap),         # laplacian variance
-                "luma": float(luma),
                 "texture": float(tex),
+                "motion_blur": float(motion_blur),
             })
 
         analytics["timing"]["preprocess_sec"] += (time.time() - t_pre)
@@ -509,7 +521,7 @@ def select_keyframes(
         before_temporal = len(pre_items)
 
         # Apply temporal filter - frames must be at least TEMPORAL_DIVERSITY_GAP apart
-        pre_items = temporal_diversity_filter_greedy(pre_items, TEMPORAL_DIVERSITY_GAP)
+        pre_items = temporal_diversity_filter_sliding_window(pre_items, TEMPORAL_DIVERSITY_GAP, k_per_window=K_PER_WINDOW)
         analytics["frames_filtered_temporal"] += (before_temporal - len(pre_items))
         analytics["timing"]["temporal_diversity_sec"] += (time.time() - t_temp)
 
@@ -557,8 +569,8 @@ def select_keyframes(
         # STAGE 3: SOTA HEAVY SIGNALS
         # Goal: compute semantic signals:
         # - closeup ratio from pose boxes
-        # - faces + face quality
-        # - celebration cue from pose 
+        # - faces + face quality + emotion intensity
+        # - celebration cue from pose
         # ---------------------------------------------------------------------
         if debug:
             print("[SOTA] >>> Stage 3: HEAVY scoring signals (pose closeup, face, celebration)")
@@ -574,23 +586,60 @@ def select_keyframes(
                 analytics["frames_filtered_closeup"] += 1
                 continue
 
-            num_faces, face_area, face_q, face_det = models.face_quality(path)
-            
-            celebration, cel_type = models.celebration_detection(path)
+            # Face quality
+            num_faces, face_area, face_q, face_det, detected_faces, img = models.face_quality(path)
+            # Emotion detecton
+            emo_intensity, emo_label = models.emotion_intensity_from_faces(path, detected_faces, img=img, max_faces=2)
+            # Pose detection
+            pose_score, pose_label, pose_breakdown = models.pose_signals(path)
 
-            # keyframe_priority defines what "content" means for this frame:
-            # 1 = face-driven thumbnail candidate (highest priority)
-            # 2 = celebration-driven candidate
-            # 3 = closeup-driven candidate (fallback)
-            if num_faces > 0:
+            # ===== CONFIG SECTION =====
+
+            # Tier-specific signal weights (used in both STAGE 3 and STAGE 5)
+            TIER_WEIGHTS = {
+                1: {"face": 0.35, "emotion": 0.35, "pose": 0.30},  # Complete celebration
+                2: {"face": 0.55, "emotion": 0.45},                # Expressive face
+                3: {"pose": 0.65, "face": 0.35},                   # Pose-driven
+                4: {"closeup": 0.60, "face": 0.40},                # Generic closeup
+            }
+            # =============================================================
+
+            FACE_Q_THR = 0.50          # tune
+            FACE_AREA_MIN = 0.03       # tune (if you normalized face_area)
+            FACE_AREA_MAX = 0.40  
+            EMO_THR = 0.20             # Expressive emotion threshold
+            POSE_THR = 0.40            # Clear pose threshold
+
+            has_good_face = (
+                num_faces > 0 and 
+                face_q >= FACE_Q_THR and 
+                FACE_AREA_MIN <= face_area <= FACE_AREA_MAX
+            )
+
+            has_emotion = emo_intensity > EMO_THR
+            has_pose = pose_score > POSE_THR
+
+            # ===== STAGE 3 (using TIER_WEIGHTS) =====
+            if has_good_face and has_emotion and has_pose:
                 kf_priority = 1
-                rank_value = face_area
-            elif celebration > 0.5:
+                w = TIER_WEIGHTS[1]
+                rank_value = (w["face"] * face_q + w["emotion"] * emo_intensity + w["pose"] * pose_score)
+                
+            elif has_good_face and has_emotion:
                 kf_priority = 2
-                rank_value = celebration
-            else:
+                w = TIER_WEIGHTS[2]
+                rank_value = w["face"] * face_q + w["emotion"] * emo_intensity
+                
+            elif has_pose:
                 kf_priority = 3
-                rank_value = closeup
+                w = TIER_WEIGHTS[3]
+                rank_value = w["pose"] * pose_score + w["face"] * face_q
+                
+            else:
+                kf_priority = 4
+                w = TIER_WEIGHTS[4]
+                rank_value = w["closeup"] * closeup + w["face"] * face_q
+
 
             candidates.append({
                 "path": path,
@@ -606,16 +655,24 @@ def select_keyframes(
                 "face_area": float(face_area),
                 "face_quality": float(face_q),
                 "face_det_score": float(face_det),
+                            
+                "emotion_intensity": float(emo_intensity),
+                "emotion_label": str(emo_label),
 
-                "celebration": float(celebration),
-                "celebration_type": str(cel_type),
-
+                "pose_score": float(pose_score),
+                "pose_label": str(pose_label),
+                "pose_breakdown": pose_breakdown,  
+                    
                 "closeup": float(closeup),
                 "sharpness": float(it["sharpness"]),
 
             })
 
         analytics["timing"]["sota_heavy_sec"] += (time.time() - t_sota)
+
+        if debug:
+                print(f"[EMO] {os.path.basename(path)} faces={num_faces} fq={face_q:.2f} "
+                    f"emo={emo_intensity:.2f} label={emo_label}")
 
         if debug:
             print(f"[SOTA] <<< Stage 3 done: candidates_after_pose/face/celebration={len(candidates)}")
@@ -699,40 +756,56 @@ def select_keyframes(
         scored: List[dict] = []
         for c in candidates_sorted:
 
-            # ---------- CONTENT SIGNAL (depends on keyframe_priority) ----------
-            # Build 3 separate semantic signals, then mix based on priority.
-
             # ---------- BUILD 3 SEMANTIC SIGNALS (face / celebration / closeup) ----------
             
-            # Face signal: NO single-face penalty. Quality is primary, extra faces add bonus.
+            # 1. Face signal: Quality is primary, extra faces add bonus.
             face_signal = 0.0
             if int(c.get("num_faces", 0)) > 0:
                 face_q = float(c.get("face_quality", 0.0))
                 nfaces = int(c.get("num_faces", 0))
 
-                face_contrib = 0.95 * face_q  # Tune to make face quality more or less important
-                multi_bonus = 0.05 * min((nfaces - 1) / 5.0, 1.0) if nfaces > 1 else 0.0
-                face_signal = float(np.clip(face_contrib + multi_bonus, 0.0, 1.0))
+                # Quality is the base
+                face_signal = face_q
+                
+                # Multi-face bonus (small)
+                if nfaces > 1:
+                    multi_bonus = 0.05 * min((nfaces - 1) / 5.0, 1.0)
+                    face_signal = min(face_signal + multi_bonus, 1.0)
 
-            cele_signal = float(np.clip(c.get("celebration", 0.0), 0.0, 1.0))
+            # 2. Emotion signal (separate)
+            emo_signal = float(np.clip(c.get("emotion_intensity", 0.0), 0.0, 1.0))
+            
+            # 3. Celebration signal: from pose score only
+            pose_signal = float(np.clip(c.get("pose_score", 0.0), 0.0, 1.0))
+            
+            # 4. Close signal: from closeup ratio only
             close_signal = float(np.clip(c.get("closeup", 0.0), 0.0, 1.0))
 
-            # ---------- PRIORITY-BASED MIX (primary + secondary boosts) ----------
-            # Priority still matters, but faces can help even in priority 2/3.
-            if c["keyframe_priority"] == 1:
-                content_src = "face"
-                # face primary, celebration can add a bit (celebrating face == strong thumbnail)
-                content_signal = 0.95 * face_signal + 0.05 * cele_signal
-            elif c["keyframe_priority"] == 2:
-                content_src = "celebration"
-                # celebration, but faces should still lift it
-                content_signal = 0.30 * cele_signal + 0.70 * face_signal
+
+            # ---------- PRIORITY-BASED MIX (4-tier system) ----------             
+
+            # Apply tier-specific weights (SAME as STAGE 3)
+            kf_priority = c["keyframe_priority"]
+            w = TIER_WEIGHTS[kf_priority]
+
+            if kf_priority == 1:
+                content_src = f"celebration:{c.get('pose_label', 'none')}"
+                content_signal = (w["face"] * face_signal + w["emotion"] * emo_signal + w["pose"] * pose_signal)
+                
+            elif kf_priority == 2:
+                content_src = f"expressive:{c.get('emotion_label', 'none')}"
+                content_signal = w["face"] * face_signal + w["emotion"] * emo_signal
+                
+            elif kf_priority == 3:
+                content_src = f"pose:{c.get('pose_label', 'none')}"
+                content_signal = w["pose"] * pose_signal + w["face"] * face_signal
+                
             else:
                 content_src = "closeup"
-                # closeup, but faces can help otherwise boring closeups
-                content_signal = 0.40 * close_signal + 0.60 * face_signal
-
+                content_signal = w["closeup"] * close_signal + w["face"] * face_signal
+                        
             content_signal = float(np.clip(content_signal, 0.0, 1.0))
+
 
             # ---------- NORMALIZE OTHER FEATURES ----------
 
@@ -755,12 +828,15 @@ def select_keyframes(
             # ---------- STORE BREAKDOWN FOR CSV ----------
             # Extra useful debug columns (optional but recommended)
             c["face_signal"] = float(face_signal)
-            c["cele_signal"] = float(cele_signal)
+            c["pose_signal"] = float(pose_signal)
             c["close_signal"] = float(close_signal)
 
             c["content_source"] = content_src
             c["content_signal"] = content_signal
             c["sharp_norm"] = sharp_norm
+
+            c["emotion_intensity"] = float(c.get("emotion_intensity", 0.0))
+            c["emotion_label"] = c.get("emotion_label", "none")
 
             c["w_content"] = w_content
             c["w_musiq"]   = w_musiq
@@ -807,8 +883,8 @@ def select_keyframes(
     print(f"[FINAL] >>> Global selection from {len(all_candidates)} candidates")
     print("=" * 72)
 
-    # Quota-based selection + min_frame_gap constraint.
-    final_selection = _quota_select(all_candidates, top_n=top_n, min_frame_gap=MIN_FRAME_GAP)
+    # Quota-based selection.
+    final_selection = _quota_select(all_candidates, top_n=top_n)
 
     # Final hard filter (quota cannot override confidence/score).
     final_selection = [
@@ -841,7 +917,7 @@ def select_keyframes(
             ok = True
             for s in final_selection:
                 si = extract_frame_index(s["path"])
-                if abs(ci - si) < 5:  # Use same min_frame_gap as _quota_select
+                if abs(ci - si) < MIN_FRAME_GAP:  # Use same min_frame_gap as _quota_select
                     ok = False
                     break
             
@@ -895,11 +971,18 @@ def select_keyframes(
             "model_confidence": round(conf, 3),                   # Classifier confidence for this frame
 
             # --- semantic context ---
-            "celebration": round(c.get("celebration", 0.0), 3),     # Pose-based celebration probability
-            "celebration_type": c.get("celebration_type", "none"),  # Category: partial, group, full, none
             "num_faces": int(c.get("num_faces", 0)),                # Number of detected faces
             "face_quality": round(c.get("face_quality", 0.0), 3),   # Combined face quality score (size, centering, detection confidence)
 
+            # --- emotion ---
+            "emotion_intensity": round(c.get("emotion_intensity", 0.0), 3),
+            "emotion_label": c.get("emotion_label", "none"),
+
+            # --- signal breakdown (super useful to debug) ---
+            "face_signal": round(c.get("face_signal", 0.0), 3),
+            "pose_signal": round(c.get("pose_signal", 0.0), 3),
+            "close_signal": round(c.get("close_signal", 0.0), 3),
+    
             # --- bookkeeping ---
             "quality_fallback": int(c.get("quality_fallback", 0)),     # Flag: MUSIQ gate fallback was used
             "input_path": c["path"],     # Original extracted frame path
@@ -923,8 +1006,8 @@ def select_keyframes(
     print(f"Filtered by conf (<{MIN_FINAL_CONF}):        {analytics['frames_filtered_conf']}")
     print(f"Filtered overlay:                {analytics['frames_filtered_overlay']}")
     print(f"Filtered blur:                   {analytics['frames_filtered_blur']}")
-    print(f"Filtered luma:                   {analytics['frames_filtered_luma']}")
     print(f"Filtered texture:                {analytics['frames_filtered_texture']}")
+    print(f"Filtered motion blur:            {analytics['frames_filtered_motion_blur']}")
     print(f"Filtered temporal                {analytics['frames_filtered_temporal']}")
     print(f"Filtered closeup (pose):         {analytics['frames_filtered_closeup']}")
     print(f"Segments empty after prefilter:  {analytics['segments_empty_after_prefilter']}")

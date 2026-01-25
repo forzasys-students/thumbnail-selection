@@ -42,21 +42,56 @@ def transition_overlay_score(path: str) -> float:
     return float(cv2.meanStdDev(gray)[1][0][0])
 
 
+def motion_blur_score(path: str) -> float:
+    """
+    Detect motion blur using gradient variance ratio.
+    
+    Returns:
+        score (0-1): Higher = less motion blur (better for thumbnails)
+    """
+    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)  # ← Already grayscale
+    if img is None:
+        return 0.0
+    
+    # FIX: Grayscale images have shape (h, w), not (h, w, 3)
+    h, w = img.shape[:2]  # ← Change this line
+    
+    # Downscale for speed
+    if max(h, w) > 480:
+        scale = 480.0 / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    
+    # Sobel gradients
+    gx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
+    
+    # Variance of gradients
+    var_gx = np.var(gx)
+    var_gy = np.var(gy)
+    
+    if var_gx < 1e-6 or var_gy < 1e-6:
+        return 0.0  # Flat image
+    
+    # Ratio should be near 1.0 for sharp, far from 1.0 for directional blur
+    ratio = min(var_gx, var_gy) / max(var_gx, var_gy)
+    
+    # Also check gradient magnitude variance (sharp = high variance)
+    grad_mag = np.sqrt(gx**2 + gy**2)
+    mag_var = np.var(grad_mag)
+    mag_norm = np.clip(mag_var / 5000.0, 0.0, 1.0)
+    
+    # Combined score
+    score = 0.6 * ratio + 0.4 * mag_norm
+    
+    return float(np.clip(score, 0.0, 1.0))
+
+
 def blur_laplacian_var(path: str) -> float:
     """Laplacian variance blur score (higher is sharper)."""
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return 0.0
     return float(cv2.Laplacian(img, cv2.CV_64F).var())
-
-
-def mean_luminance(path: str) -> float:
-    """Mean luma (Y channel) in YCrCb, [0,255]."""
-    img = cv2.imread(path)
-    if img is None:
-        return 0.0
-    ycrcb = cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)
-    return float(np.mean(ycrcb[:, :, 0]))
 
 
 def texture_proxy(path: str) -> float:

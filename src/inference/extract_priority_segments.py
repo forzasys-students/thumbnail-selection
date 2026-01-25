@@ -60,7 +60,7 @@ def natural_frame_index(path: str) -> int:
     return int(num) if num else -1
 
 
-def find_segments_by_label_set(df: pd.DataFrame, label_set: set, priority_name: str, min_length: int = 5):
+def find_segments_by_label_set(df: pd.DataFrame, label_set: set, priority_name: str, min_length: int = 3):
     """
     Extract continuous segments of frames matching any label in label_set.
     
@@ -118,8 +118,8 @@ def find_segments_by_label_set(df: pd.DataFrame, label_set: set, priority_name: 
 
 def extract_closeup_segments(
     df: pd.DataFrame,
-    min_length: int = 5,
-    min_segments_per_clip: int = 10,
+    min_length: int = 3,
+    min_segments_per_clip: int = 6,
     verbose: bool = True
 ):
     """

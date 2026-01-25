@@ -5,15 +5,16 @@ from __future__ import annotations
 import time
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
 from typing import List, Tuple, Optional, Union
+from torchvision import models, transforms
 from PIL import Image
 
 import cv2
 import numpy as np
 
-from ultralytics import YOLO
+from hsemotion.facial_emotions import HSEmotionRecognizer
 from insightface.app import FaceAnalysis
+from ultralytics import YOLO
 import pyiqa
 
 class SOTAModels:
@@ -56,25 +57,45 @@ class SOTAModels:
         # Cache for pose results 
         self._pose_cache = {}
 
+        # Cache for emotion results
+        self._emotion_cache = {} 
+
+        if self.debug:
+            print("[SOTA] Loading HSEmotion")
+
+        # HSEmotion device should match your pipeline device
+        # hsemotion accepts 'cpu' or 'cuda'
+        emo_device = "cuda" if self.device.startswith("cuda") else "cpu"
+        self.emotion_rec = HSEmotionRecognizer(
+            model_name="enet_b0_8_best_afew",
+            device=emo_device
+        )
+
+
     # -----------------------
     # Single pose inference
     # -----------------------
     
     def get_pose_result(self, path: str):
-        """
-        Get pose result with caching.
-        This prevents calling YOLO twice per frame (closeup + celebration).
-        """
         if path in self._pose_cache:
             return self._pose_cache[path]
         
         try:
-            result = self.pose_model(path, verbose=False)[0]
+            result = self.pose_model.predict(
+                path,
+                imgsz=640,       # Faster, still good for broadcast footage
+                conf=0.30,       # Higher - fewer false positives
+                iou=0.5,         # Lower - better for overlapping people (celebrations)
+                max_det=10,      # Limit detections (group celebrations rarely >10 people in frame)
+                verbose=False,
+            )[0]
             self._pose_cache[path] = result
             return result
         except Exception:
             self._pose_cache[path] = None
             return None
+
+        
 
     # -----------------------
     # Pose / closeup 
@@ -95,108 +116,123 @@ class SOTAModels:
             best = max(best, area / img_area)
         return float(best)
 
-    # -----------------------
-    # Celebration 
-    # -----------------------
 
-    def celebration_detection(self, path: str) -> Tuple[float, str]:
-        """Improved celebration detection using cached pose result."""
+    def pose_signals(self, path: str) -> Tuple[float, str, dict]:
+        """
+        Detect soccer-specific poses with STRICT thresholds.
+        
+        Returns:
+            pose_score: [0..1] confidence of detected pose
+            pose_label: "arms_raised" | "jump" | "slide" | "hands_on_head" | "one_arm_up" | "none"
+            pose_breakdown: dict of all pose scores
+        """
         res = self.get_pose_result(path)
         if res is None or res.keypoints is None or len(res.keypoints) == 0:
-            return 0.0, "none"
+            return 0.0, "none", {}
 
-        num_people = len(res.keypoints)
         best_score = 0.0
-        best_type = "none"
-        high_conf_people = 0
+        best_label = "none"
+        best_breakdown = {}
 
         for det in res.keypoints:
-            kps = det.xy[0]
-            if kps is None or len(kps) < 17:
-                continue
-
-            # Keypoint confidence gating
+            xy = det.xy[0].detach().cpu().numpy()  # (17, 2)
             conf = getattr(det, "conf", None)
+            
             if conf is not None:
-                try:
-                    conf_arr = conf[0].detach().cpu().numpy()
-                    valid_conf = conf_arr[conf_arr > 0.4]
-                    if valid_conf.size < 10:
-                        continue
-                    avg_conf = float(np.mean(valid_conf))
-                    if avg_conf < 0.5:
-                        continue
-                    high_conf_people += 1
-                except Exception:
+                conf = conf[0].detach().cpu().numpy()
+                # Require HIGH confidence on core keypoints
+                core_conf = np.mean(conf[[5, 6, 11, 12]])
+                if core_conf < 0.55:  # ← Was 0.45, now 0.55
                     continue
             else:
-                high_conf_people += 1
+                conf = np.ones(17, dtype=np.float32)
+                core_conf = 1.0
 
-            ls, rs = kps[5], kps[6]
-            lw, rw = kps[9], kps[10]
-            lh, rh = kps[11], kps[12]
-            lk, rk = kps[13], kps[14]
+            # Keypoint indices
+            ls, rs = xy[5], xy[6]
+            lw, rw = xy[9], xy[10]
+            lh, rh = xy[11], xy[12]
+            lk, rk = xy[13], xy[14]
 
-            shoulder_y = float((ls[1] + rs[1]) / 2.0)
-            hip_y = float((lh[1] + rh[1]) / 2.0)
-            torso_h = abs(hip_y - shoulder_y)
-            if torso_h <= 1e-6:
+            shoulder_y = (ls[1] + rs[1]) / 2
+            hip_y = (lh[1] + rh[1]) / 2
+            torso = abs(hip_y - shoulder_y)
+            
+            if torso < 1e-6:
                 continue
 
-            left_arm = (shoulder_y - float(lw[1])) / torso_h
-            right_arm = (shoulder_y - float(rw[1])) / torso_h
-            avg_arm = (left_arm + right_arm) / 2.0
-
-            shoulder_w = abs(float(rs[0] - ls[0]))
-            wrist_w = abs(float(rw[0] - lw[0]))
-            spread = (wrist_w / shoulder_w) if shoulder_w > 1e-6 else 0.0
-
-            jumping = (float(lk[1]) < hip_y - torso_h * 0.3) or (float(rk[1]) < hip_y - torso_h * 0.3)
-            both_arms_up = (left_arm > 0.4) and (right_arm > 0.4)
-
-            if jumping and avg_arm > 0.4:
-                score, typ = 1.0, "jumping_celebration"
-            elif both_arms_up and spread > 1.3:
-                score, typ = 0.95, "full_celebration"
-            elif both_arms_up:
-                score, typ = 0.8, "arms_raised"
-            elif (left_arm > 0.2) or (right_arm > 0.2):
-                score, typ = 0.5, "partial_celebration"
-            else:
-                score, typ = 0.0, "none"
-
-            if conf is not None and score > 0.0:
-                score *= avg_conf
-
-            if score > best_score:
-                best_score = float(score)
-                best_type = typ
-
-        if high_conf_people >= 2 and best_score > 0.5:
-            group_bonus = min(high_conf_people * 0.10, 0.25)
-            best_score = min(best_score + group_bonus, 1.0)
+            # --- POSE FEATURES (STRICT) ---
             
-            if high_conf_people >= 2:
-                best_type = f"group_{best_type}"
+            lw_up = (shoulder_y - lw[1]) / torso
+            rw_up = (shoulder_y - rw[1]) / torso
+            knee_lift = max((hip_y - lk[1]) / torso, (hip_y - rk[1]) / torso)
             
-            if high_conf_people >= 3 and best_score > 0.75:
-                best_score = min(best_score * 1.1, 1.0)
+            # Sliding detection
+            knee_low = min(lk[1], rk[1]) > hip_y + 0.3 * torso
+            body_horizontal = abs(shoulder_y - hip_y) < 0.3 * torso
+            
+            # Hands on head
+            wrists_high = (lw[1] < shoulder_y) and (rw[1] < shoulder_y)
+            wrists_close = abs(lw[0] - rw[0]) < abs(rs[0] - ls[0]) * 0.8
 
-        return float(best_score), str(best_type)
+            # --- POSE SCORES (VERY STRICT) ---
+            
+            scores = {}
+            
+            # Arms raised - both wrists WELL above shoulders
+            if lw_up > 0.55 and rw_up > 0.55:
+                arm_avg = (lw_up + rw_up) / 2
+                scores["arms_raised"] = float(np.clip((arm_avg - 0.45) / 0.5, 0.0, 1.0))
+            
+            # Jumping - knees notably lifted
+            if knee_lift > 0.40:
+                jump_score = float(np.clip((knee_lift - 0.30) / 0.4, 0.0, 1.0))
+                # Bonus if arms also raised
+                if max(lw_up, rw_up) > 0.45:
+                    jump_score = min(jump_score * 1.15, 1.0)
+                scores["jump"] = jump_score
+            
+            # Sliding celebration
+            if knee_low and body_horizontal:
+                scores["slide"] = 0.85
+            
+            # Hands on head
+            if wrists_high and wrists_close:
+                scores["hands_on_head"] = 0.75
+            
+            # One arm up (partial celebration)
+            if (lw_up > 0.60) ^ (rw_up > 0.60):  # XOR
+                scores["one_arm_up"] = float(np.clip((max(lw_up, rw_up) - 0.50) / 0.5, 0.0, 1.0))
+
+            # Weight by keypoint confidence
+            for k in scores:
+                scores[k] *= core_conf
+
+            # Pick best pose for this person
+            if scores:
+                label = max(scores, key=scores.get)
+                score = scores[label]
+                
+                if score > best_score:
+                    best_score = score
+                    best_label = label
+                    best_breakdown = scores
+
+        # NO GROUP LOGIC - just return best individual pose
+        return float(best_score), str(best_label), dict(best_breakdown)
 
     # -----------------------
     # Face quality
     # -----------------------
-
-    def face_quality(self, path: str) -> Tuple[int, float, float, float]:
+    def face_quality(self, path: str) -> Tuple[int, float, float, float, List, Optional[np.ndarray]]:
         """Returns: num_faces, largest_face_area, face_quality, best_det_score"""
         img = cv2.imread(path)
         if img is None:
-            return 0, 0.0, 0.0, 0.0
+            return 0, 0.0, 0.0, 0.0, [], None
 
         faces = self.face_app.get(img)
         if not faces:
-            return 0, 0.0, 0.0, 0.0
+            return 0, 0.0, 0.0, 0.0, [], img
 
         h, w = img.shape[:2]
         img_area = float(h * w)
@@ -212,12 +248,12 @@ class SOTAModels:
             largest = max(largest, area)
 
             face_coverage = area / img_area
-            if face_coverage >= 0.15 and face_coverage <= 0.40:
+            if face_coverage >= 0.12 and face_coverage <= 0.50:
                 size_score = 1.0
-            elif face_coverage < 0.15:
-                size_score = min(face_coverage / 0.15, 1.0)
+            elif face_coverage < 0.12:
+                size_score = min(face_coverage / 0.12, 1.0)
             else:
-                size_score = max(1.0 - (face_coverage - 0.40) / 0.30, 0.5)
+                size_score = max(1.0 - (face_coverage - 0.50) / 0.30, 0.5)
             
             fx, fy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
             dist = np.sqrt((fx - cx) ** 2 + (fy - cy) ** 2)
@@ -231,7 +267,10 @@ class SOTAModels:
             best_q = max(best_q, float(q))
 
         num = int(len(faces))
-        return num, float(largest), float(best_q), float(best_det)
+        largest_norm = float(largest / img_area)
+        return num, largest_norm, float(best_q), float(best_det), faces, img # treat face_area as [0..1].
+
+
 
     # -----------------------
     #  BATCHED MUSIQ 
@@ -313,14 +352,90 @@ class SOTAModels:
         
         return scores
 
+
     def musiq_norm(self, path: str) -> float:
         """Single-image MUSIQ (uses batch internally)."""
         return self.musiq_norm_batch([path])[0]
     
+    # -----------------------
+    #  Clear caches
+    # -----------------------
     def clear_caches(self):
         """Clear all caches (call between videos to free memory)."""
         self._musiq_cache.clear()
         self._pose_cache.clear()
+        self._emotion_cache.clear() 
+
+    # -----------------------
+    #  Emotion detection from faces
+    # -----------------------
+    def emotion_intensity_from_faces(self, path: str, detected_faces: List, img: Optional[np.ndarray], max_faces: int = 2) -> Tuple[float, str]:
+        if path in self._emotion_cache:
+            return self._emotion_cache[path]
+        
+        if not detected_faces:
+            return 0.0, "none"
+        
+        if img is None:
+            img = cv2.imread(path)
+        
+        h, w = img.shape[:2]
+        
+        # Skip self.face_app.get() - use detected_faces directly
+        faces = detected_faces
+
+        def area(f):
+            x1, y1, x2, y2 = map(float, f.bbox.tolist())
+            return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+        faces = sorted(faces, key=area, reverse=True)[:max_faces]
+
+        # For enet_b0_8_* models (8 classes)
+        idx = {
+            "Anger": 0,
+            "Contempt": 1,
+            "Disgust": 2,
+            "Fear": 3,
+            "Happiness": 4,
+            "Neutral": 5,
+            "Sadness": 6,
+            "Surprise": 7,
+        }
+        expressive = ["Happiness", "Surprise", "Anger"]
+
+        best_intensity = 0.0
+        best_label = "none"
+
+        for f in faces:
+            x1, y1, x2, y2 = map(int, f.bbox.tolist())
+            x1 = max(0, x1); y1 = max(0, y1)
+            x2 = min(w - 1, x2); y2 = min(h - 1, y2)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            crop = img[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+
+            # IMPORTANT: pass numpy array, NOT PIL.
+            # hsemotion will do Image.fromarray() internally.
+            crop_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+            emo_label, emo_scores = self.emotion_rec.predict_emotions(crop_rgb)  # emo_scores is np array
+            intensity = max(float(emo_scores[idx[k]]) for k in expressive)
+
+            # weight by face area (relative) so tiny faces don't dominate
+            fa = float((x2 - x1) * (y2 - y1)) / float(w * h)
+            area_w = min(fa / 0.25, 1.0)  # saturate at 25% of frame
+            intensity *= area_w
+
+            if intensity > best_intensity:
+                best_intensity = intensity
+                best_label = str(emo_label)
+
+        result = (float(np.clip(best_intensity, 0.0, 1.0)), best_label)
+        self._emotion_cache[path] = result 
+        return result
 
 
 class LogoDetector:
@@ -401,3 +516,4 @@ class LogoDetector:
                     probs.append(0.0)
 
         return probs
+
