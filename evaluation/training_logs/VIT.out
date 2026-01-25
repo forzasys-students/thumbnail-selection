@@ -1,0 +1,298 @@
+Starting job 2894790 on gpu-11 on Fox at Tue Jan 20 20:17:58 CET 2026
+
+Python path: /fp/homes01/u01/ec-aliaana/.conda/envs/SoccerNet311/bin/python
+CUDA available? True | Device: NVIDIA GeForce RTX 3090
+Training label map: {'Close-up_behind_the_goal': 0, 'Close-up_corner': 1, 'Close-up_player_or_field_referee': 2, 'Close-up_side_staff': 3, 'Main_camera_center': 4, 'Main_camera_left': 5, 'Main_camera_right': 6, 'Public': 7}
+
+Dataset info:
+  Total samples: 9535
+  Unique games: 101
+  Classes: 8
+
+Split sizes:
+  Train: 8269 samples from 85 games
+  Val:   1266 samples from 16 games
+
+Training VIT on cuda
+Epochs: 20, Batch size: 32, LR: 0.0001
+
+[Epoch 1/20] Batch 50/259 Loss: 0.2564
+[Epoch 1/20] Batch 100/259 Loss: 0.2404
+[Epoch 1/20] Batch 150/259 Loss: 0.1643
+[Epoch 1/20] Batch 200/259 Loss: 0.1985
+[Epoch 1/20] Batch 250/259 Loss: 0.3331
+
+Epoch 1/20 completed in 67.6s
+  Train Loss: 0.3729
+  Val Loss:   0.3097
+  Val Acc:    89.10%
+  LR:         0.000100
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 2/20] Batch 50/259 Loss: 0.0523
+[Epoch 2/20] Batch 100/259 Loss: 0.1036
+[Epoch 2/20] Batch 150/259 Loss: 0.2472
+[Epoch 2/20] Batch 200/259 Loss: 0.4670
+[Epoch 2/20] Batch 250/259 Loss: 0.1218
+
+Epoch 2/20 completed in 68.0s
+  Train Loss: 0.1568
+  Val Loss:   0.3769
+  Val Acc:    88.23%
+  LR:         0.000100
+
+[Epoch 3/20] Batch 50/259 Loss: 0.0450
+[Epoch 3/20] Batch 100/259 Loss: 0.1214
+[Epoch 3/20] Batch 150/259 Loss: 0.0138
+[Epoch 3/20] Batch 200/259 Loss: 0.0119
+[Epoch 3/20] Batch 250/259 Loss: 0.0851
+
+Epoch 3/20 completed in 68.3s
+  Train Loss: 0.0874
+  Val Loss:   0.4265
+  Val Acc:    88.31%
+  LR:         0.000100
+
+[Epoch 4/20] Batch 50/259 Loss: 0.3014
+[Epoch 4/20] Batch 100/259 Loss: 0.0907
+[Epoch 4/20] Batch 150/259 Loss: 0.0213
+[Epoch 4/20] Batch 200/259 Loss: 0.2921
+[Epoch 4/20] Batch 250/259 Loss: 0.0160
+
+Epoch 4/20 completed in 68.8s
+  Train Loss: 0.0726
+  Val Loss:   0.4439
+  Val Acc:    87.91%
+  LR:         0.000100
+
+[Epoch 5/20] Batch 50/259 Loss: 0.0161
+[Epoch 5/20] Batch 100/259 Loss: 0.1063
+[Epoch 5/20] Batch 150/259 Loss: 0.0093
+[Epoch 5/20] Batch 200/259 Loss: 0.0250
+[Epoch 5/20] Batch 250/259 Loss: 0.2877
+
+Epoch 5/20 completed in 68.8s
+  Train Loss: 0.0655
+  Val Loss:   0.4372
+  Val Acc:    89.65%
+  LR:         0.000100
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 6/20] Batch 50/259 Loss: 0.0018
+[Epoch 6/20] Batch 100/259 Loss: 0.0332
+[Epoch 6/20] Batch 150/259 Loss: 0.1928
+[Epoch 6/20] Batch 200/259 Loss: 0.2143
+[Epoch 6/20] Batch 250/259 Loss: 0.0087
+
+Epoch 6/20 completed in 68.8s
+  Train Loss: 0.0523
+  Val Loss:   0.6628
+  Val Acc:    83.25%
+  LR:         0.000100
+
+[Epoch 7/20] Batch 50/259 Loss: 0.0047
+[Epoch 7/20] Batch 100/259 Loss: 0.0014
+[Epoch 7/20] Batch 150/259 Loss: 0.0553
+[Epoch 7/20] Batch 200/259 Loss: 0.0106
+[Epoch 7/20] Batch 250/259 Loss: 0.0955
+
+Epoch 7/20 completed in 68.9s
+  Train Loss: 0.0429
+  Val Loss:   0.4621
+  Val Acc:    89.81%
+  LR:         0.000100
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 8/20] Batch 50/259 Loss: 0.0036
+[Epoch 8/20] Batch 100/259 Loss: 0.0168
+[Epoch 8/20] Batch 150/259 Loss: 0.3256
+[Epoch 8/20] Batch 200/259 Loss: 0.0395
+[Epoch 8/20] Batch 250/259 Loss: 0.2195
+
+Epoch 8/20 completed in 68.7s
+  Train Loss: 0.0437
+  Val Loss:   0.5491
+  Val Acc:    87.52%
+  LR:         0.000100
+
+[Epoch 9/20] Batch 50/259 Loss: 0.0064
+[Epoch 9/20] Batch 100/259 Loss: 0.0135
+[Epoch 9/20] Batch 150/259 Loss: 0.0015
+[Epoch 9/20] Batch 200/259 Loss: 0.0099
+[Epoch 9/20] Batch 250/259 Loss: 0.2369
+
+Epoch 9/20 completed in 68.9s
+  Train Loss: 0.0271
+  Val Loss:   0.5313
+  Val Acc:    88.47%
+  LR:         0.000100
+
+[Epoch 10/20] Batch 50/259 Loss: 0.0013
+[Epoch 10/20] Batch 100/259 Loss: 0.0020
+[Epoch 10/20] Batch 150/259 Loss: 0.0310
+[Epoch 10/20] Batch 200/259 Loss: 0.0034
+[Epoch 10/20] Batch 250/259 Loss: 0.0043
+
+Epoch 10/20 completed in 68.9s
+  Train Loss: 0.0255
+  Val Loss:   0.5764
+  Val Acc:    88.55%
+  LR:         0.000100
+
+[Epoch 11/20] Batch 50/259 Loss: 0.0057
+[Epoch 11/20] Batch 100/259 Loss: 0.0175
+[Epoch 11/20] Batch 150/259 Loss: 0.0140
+[Epoch 11/20] Batch 200/259 Loss: 0.0622
+[Epoch 11/20] Batch 250/259 Loss: 0.0113
+  LR reduced: 0.000100 -> 0.000050
+
+Epoch 11/20 completed in 69.2s
+  Train Loss: 0.0340
+  Val Loss:   0.6668
+  Val Acc:    87.99%
+  LR:         0.000050
+
+[Epoch 12/20] Batch 50/259 Loss: 0.0007
+[Epoch 12/20] Batch 100/259 Loss: 0.0012
+[Epoch 12/20] Batch 150/259 Loss: 0.0005
+[Epoch 12/20] Batch 200/259 Loss: 0.0023
+[Epoch 12/20] Batch 250/259 Loss: 0.0005
+
+Epoch 12/20 completed in 69.1s
+  Train Loss: 0.0123
+  Val Loss:   0.4966
+  Val Acc:    90.36%
+  LR:         0.000050
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 13/20] Batch 50/259 Loss: 0.0040
+[Epoch 13/20] Batch 100/259 Loss: 0.0016
+[Epoch 13/20] Batch 150/259 Loss: 0.0002
+[Epoch 13/20] Batch 200/259 Loss: 0.0005
+[Epoch 13/20] Batch 250/259 Loss: 0.0004
+
+Epoch 13/20 completed in 68.8s
+  Train Loss: 0.0014
+  Val Loss:   0.5116
+  Val Acc:    90.52%
+  LR:         0.000050
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 14/20] Batch 50/259 Loss: 0.0002
+[Epoch 14/20] Batch 100/259 Loss: 0.0005
+[Epoch 14/20] Batch 150/259 Loss: 0.0004
+[Epoch 14/20] Batch 200/259 Loss: 0.0003
+[Epoch 14/20] Batch 250/259 Loss: 0.0003
+
+Epoch 14/20 completed in 68.8s
+  Train Loss: 0.0007
+  Val Loss:   0.5205
+  Val Acc:    90.84%
+  LR:         0.000050
+  ✓ New best model saved: models/vit_best.pt
+
+[Epoch 15/20] Batch 50/259 Loss: 0.0004
+[Epoch 15/20] Batch 100/259 Loss: 0.0002
+[Epoch 15/20] Batch 150/259 Loss: 0.0003
+[Epoch 15/20] Batch 200/259 Loss: 0.0002
+[Epoch 15/20] Batch 250/259 Loss: 0.0003
+
+Epoch 15/20 completed in 68.8s
+  Train Loss: 0.0004
+  Val Loss:   0.5320
+  Val Acc:    90.44%
+  LR:         0.000050
+
+[Epoch 16/20] Batch 50/259 Loss: 0.0002
+[Epoch 16/20] Batch 100/259 Loss: 0.0002
+[Epoch 16/20] Batch 150/259 Loss: 0.0002
+[Epoch 16/20] Batch 200/259 Loss: 0.0003
+[Epoch 16/20] Batch 250/259 Loss: 0.0002
+
+Epoch 16/20 completed in 68.7s
+  Train Loss: 0.0002
+  Val Loss:   0.5420
+  Val Acc:    90.44%
+  LR:         0.000050
+
+[Epoch 17/20] Batch 50/259 Loss: 0.0002
+[Epoch 17/20] Batch 100/259 Loss: 0.0001
+[Epoch 17/20] Batch 150/259 Loss: 0.0002
+[Epoch 17/20] Batch 200/259 Loss: 0.0002
+[Epoch 17/20] Batch 250/259 Loss: 0.0001
+
+Epoch 17/20 completed in 68.7s
+  Train Loss: 0.0002
+  Val Loss:   0.5501
+  Val Acc:    90.44%
+  LR:         0.000050
+
+[Epoch 18/20] Batch 50/259 Loss: 0.0001
+[Epoch 18/20] Batch 100/259 Loss: 0.0002
+[Epoch 18/20] Batch 150/259 Loss: 0.0002
+[Epoch 18/20] Batch 200/259 Loss: 0.0001
+[Epoch 18/20] Batch 250/259 Loss: 0.0002
+  LR reduced: 0.000050 -> 0.000025
+
+Epoch 18/20 completed in 68.7s
+  Train Loss: 0.0002
+  Val Loss:   0.5589
+  Val Acc:    90.36%
+  LR:         0.000025
+
+[Epoch 19/20] Batch 50/259 Loss: 0.0002
+[Epoch 19/20] Batch 100/259 Loss: 0.0002
+[Epoch 19/20] Batch 150/259 Loss: 0.0001
+[Epoch 19/20] Batch 200/259 Loss: 0.0002
+[Epoch 19/20] Batch 250/259 Loss: 0.0001
+
+Epoch 19/20 completed in 68.7s
+  Train Loss: 0.0002
+  Val Loss:   0.5637
+  Val Acc:    90.52%
+  LR:         0.000025
+
+[Epoch 20/20] Batch 50/259 Loss: 0.0001
+[Epoch 20/20] Batch 100/259 Loss: 0.0001
+[Epoch 20/20] Batch 150/259 Loss: 0.0002
+[Epoch 20/20] Batch 200/259 Loss: 0.0001
+[Epoch 20/20] Batch 250/259 Loss: 0.0002
+
+Epoch 20/20 completed in 68.6s
+  Train Loss: 0.0001
+  Val Loss:   0.5683
+  Val Acc:    90.52%
+  LR:         0.000025
+
+============================================================
+Training complete!
+Best validation accuracy: 90.84%
+Best model saved to: models/vit_best.pt
+Training history saved to: models/vit_history.json
+
+For final evaluation, use evaluate_model.py with your manual test set.
+============================================================
+
+Job 2894790 consumed 7.3 billing hours from project ec12.
+
+Submitted 2026-01-20T15:11:56; waited 5.1 hours in the queue after becoming eligible to run.
+
+Requested wallclock time: 4.0 hours
+Elapsed wallclock time:   23.2 minutes
+
+Job exited normally.
+
+Task and CPU statistics:
+ID             CPUs  Tasks  CPU util                Start   Elapsed  Exit status
+2894790           4            0.0 %  2026-01-20T20:17:58  1392.0 s  0
+2894790.batch     4      1    35.7 %  2026-01-20T20:17:58  1392.0 s  0
+
+Used CPU time:   33.2 CPU minutes
+Unused CPU time: 59.6 CPU minutes
+
+Memory statistics, in GiB:
+ID              Alloc   Usage
+2894790          32.0        
+2894790.batch    32.0     1.9
+
+Job 2894790 completed at Tue Jan 20 20:41:10 CET 2026
