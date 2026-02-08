@@ -39,6 +39,7 @@ class SOTAModels:
             if self.device.startswith("cuda")
             else ["CPUExecutionProvider"]
         )
+        
         if self.debug:
             print(f"[SOTA] Loading InsightFace: {insightface_name} providers={providers}")
 
@@ -47,12 +48,13 @@ class SOTAModels:
         self.face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
         if self.debug:
-            print("[SOTA] Loading MUSIQ (pyiqa)")
+            print("[SOTA] Loading TOPIQ (pyiqa)")
 
-        self.musiq = pyiqa.create_metric("musiq", device=self.device)
-        
-        # Cache for MUSIQ
-        self._musiq_cache = {}
+        #self.musiq = pyiqa.create_metric("musiq", device=self.device)        
+        self.iqa = pyiqa.create_metric("topiq_nr", device=self.device)
+
+        # Cache for TOPIQ
+        self._iqa_cache = {}
         
         # Cache for pose results 
         self._pose_cache = {}
@@ -273,96 +275,75 @@ class SOTAModels:
 
 
     # -----------------------
-    #  BATCHED MUSIQ 
+    #  BATCHED IQA 
     # -----------------------
-
-    def musiq_norm_batch(self, paths: List[str]) -> List[float]:
-        """
-        ACTUALLY batch process MUSIQ.
-        Previous version just looped - this version truly batches.
-        """
+    def iqa_norm_batch(self, paths: List[str]) -> List[float]:
         if not paths:
             return []
-        
-        # Separate cached vs uncached
+
         uncached_paths = []
         uncached_indices = []
         scores = [None] * len(paths)
-        
+
         for i, path in enumerate(paths):
-            if path in self._musiq_cache:
-                scores[i] = self._musiq_cache[path]
+            if path in self._iqa_cache:
+                scores[i] = self._iqa_cache[path]
             else:
                 uncached_paths.append(path)
                 uncached_indices.append(i)
-        
+
         if not uncached_paths:
             return scores
-        
-        try:
-            # Load all images as PIL
-            pil_images = []
-            valid_indices = []
-            
-            for idx, path in zip(uncached_indices, uncached_paths):
-                try:
-                    img = Image.open(path).convert('RGB')
-                    pil_images.append(img)
-                    valid_indices.append(idx)
-                except Exception as e:
-                    if self.debug:
-                        print(f"[MUSIQ] Failed to load {path}: {e}")
-                    scores[idx] = 0.5
-                    self._musiq_cache[path] = 0.5
-            
-            if not pil_images:
-                return scores
-            
-            # ACTUAL BATCHING: Process all images at once if model supports it
-            # Note: pyiqa's MUSIQ might not support true batching, so we compromise
-            # by at least avoiding redundant preprocessing
-            batch_scores = []
-            for img in pil_images:
-                try:
-                    s = self.musiq(img)
-                    if hasattr(s, "item"):
-                        s = float(s.item())
-                    else:
-                        s = float(s)
-                    s_norm = float(np.clip(s / 100.0, 0.0, 1.0))
-                    batch_scores.append(s_norm)
-                except Exception as e:
-                    if self.debug:
-                        print(f"[MUSIQ] Error: {e}")
-                    batch_scores.append(0.5)
-            
-            # Fill in results and cache
-            for idx, path, score in zip(valid_indices, uncached_paths, batch_scores):
-                scores[idx] = score
-                self._musiq_cache[path] = score
-                
-        except Exception as e:
-            if self.debug:
-                print(f"[MUSIQ] Batch error: {e}")
-            # Fallback: fill remaining with 0.5
-            for idx in uncached_indices:
-                if scores[idx] is None:
-                    scores[idx] = 0.5
-                    self._musiq_cache[paths[idx]] = 0.5
-        
+
+        pil_images = []
+        valid = []
+        for idx, path in zip(uncached_indices, uncached_paths):
+            try:
+                img = Image.open(path).convert("RGB")
+                pil_images.append(img)
+                valid.append((idx, path))
+            except Exception as e:
+                if self.debug:
+                    print(f"[IQA] Failed to load {path}: {e}")
+                scores[idx] = 0.5
+                self._iqa_cache[path] = 0.5
+
+        if not pil_images:
+            return scores
+
+        for (idx, path), img in zip(valid, pil_images):
+            try:
+                s = self.iqa(img)
+                s = float(s.item()) if hasattr(s, "item") else float(s)
+
+                # Make it consistent: higher = better
+                if getattr(self.iqa, "lower_better", False):
+                    s = -s
+
+                # Clamp to a stable range, then map to [0,1]
+                s = float(np.clip(s, -5.0, 5.0))
+                s_norm = (s + 5.0) / 10.0
+            except Exception as e:
+                if self.debug:
+                    print(f"[IQA] Error: {e}")
+                s_norm = 0.5
+
+            scores[idx] = s_norm
+            self._iqa_cache[path] = s_norm
+
         return scores
 
 
-    def musiq_norm(self, path: str) -> float:
-        """Single-image MUSIQ (uses batch internally)."""
-        return self.musiq_norm_batch([path])[0]
+    def iqa_norm(self, path: str) -> float:
+        return self.iqa_norm_batch([path])[0]
+
     
     # -----------------------
     #  Clear caches
     # -----------------------
     def clear_caches(self):
         """Clear all caches (call between videos to free memory)."""
-        self._musiq_cache.clear()
+        self._iqa_cache.clear()
         self._pose_cache.clear()
         self._emotion_cache.clear() 
 
@@ -436,7 +417,7 @@ class SOTAModels:
         result = (float(np.clip(best_intensity, 0.0, 1.0)), best_label)
         self._emotion_cache[path] = result 
         return result
-
+    
 
 class LogoDetector:
     def __init__(self, ckpt_path: str, device: str = "cuda"):

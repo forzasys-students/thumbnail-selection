@@ -116,7 +116,6 @@ def run_inference(model, video_path):
         }
         progress_queue.put(current_status.copy())
 
-
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'POST':
@@ -125,10 +124,13 @@ def index():
 
         if video_file:
             filename = secure_filename(video_file.filename)
-            video_path = os.path.join(BASE_DIR, "data", filename)
+
+            upload_dir = os.path.join(BASE_DIR, "data")
+            os.makedirs(upload_dir, exist_ok=True) 
+
+            video_path = os.path.join(upload_dir, filename)
             video_file.save(video_path)
 
-            # Run inference in background thread
             thread = threading.Thread(target=run_inference, args=(model, video_path))
             thread.daemon = True
             thread.start()
