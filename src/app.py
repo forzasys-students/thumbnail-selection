@@ -4,6 +4,7 @@ import subprocess
 import threading
 import queue
 import json
+import csv
 from werkzeug.utils import secure_filename
 import time
 
@@ -166,34 +167,46 @@ def stream():
     
     return Response(generate(), mimetype='text/event-stream')
 
-
 @app.route('/results')
 def results():
     keyframes = []
-    print(f"[DEBUG] Looking for keyframes in: {OUTPUT_FOLDER}")
-    print(f"[DEBUG] OUTPUT_FOLDER exists: {os.path.exists(OUTPUT_FOLDER)}")
-    
-    try:
-        # Walk through all subdirectories to find images
-        for root, dirs, files in os.walk(OUTPUT_FOLDER):
-            print(f"[DEBUG] Checking directory: {root}")
-            print(f"[DEBUG] Files found: {files}")
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-                    # Get relative path from OUTPUT_FOLDER
-                    rel_path = os.path.relpath(os.path.join(root, file), OUTPUT_FOLDER)
-                    keyframes.append(rel_path.replace('\\', '/'))  # Convert to forward slashes for URLs
-                    print(f"[DEBUG] Added keyframe: {rel_path}")
-        keyframes = sorted(keyframes)
-        print(f"[DEBUG] Total keyframes found: {len(keyframes)}")
-    except FileNotFoundError as e:
-        print(f"[DEBUG] FileNotFoundError: {e}")
-        keyframes = []
-    except Exception as e:
-        print(f"[DEBUG] Unexpected error: {e}")
-        keyframes = []
+    keyframe_data = []
 
-    return render_template('results.html', keyframes=keyframes)
+    csv_path = os.path.join(BASE_DIR, "data", "inference_output", "keyframes", "keyframes.csv")
+
+    try:
+        # Load metadata CSV
+        if os.path.exists(csv_path):
+            with open(csv_path, newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    filename = row.get("saved_path", "")
+                    if filename:
+                        # Extract just the filename (not the full path)
+                        basename = os.path.basename(filename)
+                        
+                        keyframes.append(basename)
+
+                        keyframe_data.append({
+                            "filename": basename,
+                            "final_score": float(row.get("final_score", 0)),
+                            "w_iqa": float(row.get("w_iqa", 0)),
+                            "face_signal": float(row.get("face_signal", 0)),
+                            "emotion_intensity": float(row.get("emotion_intensity", 0)),
+                            "pose_signal": float(row.get("pose_signal", 0)),
+                        })
+
+        keyframes = sorted(keyframes)
+
+    except Exception as e:
+        print("Error loading metadata:", e)
+
+    return render_template(
+        'results.html',
+        keyframes=keyframes,
+        keyframe_data=keyframe_data
+    )
+
 
 
 @app.route('/api/status')

@@ -11,6 +11,7 @@
         <h1>Thumbnail Candidates</h1>
         <p>Review and select the best frames for your video thumbnails</p>
     </div>
+
     
     <div class="container">
         <div class="controls">
@@ -21,6 +22,20 @@
                     No keyframes found
                 {% endif %}
             </div>
+
+            <div class="filter-panel">
+                <label>
+                    Sort By
+                    <select id="sortBy">
+                        <option value="final_score">Final Score</option>
+                        <option value="w_iqa">IQA</option>
+                        <option value="face_signal">Face Signal</option>
+                        <option value="pose_signal">Pose Signal</option>
+                        <option value="emotion_intensity">Emotion Signal</option>
+                    </select>
+                </label>
+            </div>
+
             
             <div class="button-group">
                 <div class="view-toggle">
@@ -34,47 +49,24 @@
             </div>
         </div>
         
-        {% if keyframes %}
-        <div class="gallery" id="gallery">
-            {% for img in keyframes %}
-            <div class="keyframe-card" onclick="openModal({{ loop.index0 }})">
-                <div class="image-wrapper">
-                    <img src="{{ url_for('serve_keyframe', filename=img) }}" 
-                         alt="{{ img }}"
-                         loading="lazy">
-                </div>
-                <div class="card-info">
-                    <div class="card-title">Frame {{ loop.index }}</div>
-                    <div class="card-meta">{{ img }}</div>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty-state">
-            <div class="empty-state-icon">📭</div>
-            <h2>No Keyframes Found</h2>
-            <p>Process a video to extract keyframes</p>
-            <button class="btn-primary" style="margin-top: 20px;" onclick="window.location.href='{{ url_for('index') }}'">
-                Upload Video
-            </button>
-        </div>
-        {% endif %}
+        <div class="gallery" id="gallery"></div>
+
     </div>
     
     <!-- Modal for image preview -->
     <div id="imageModal" class="modal" onclick="closeModal()">
         <span class="modal-close">&times;</span>
-        <button class="modal-nav modal-prev" onclick="event.stopPropagation(); changeImage(-1)">❮</button>
+        <button class="modal-nav modal-prev" onclick="event.stopPropagation(); changeImage(-1)">◄</button>
         <div class="modal-content">
             <img class="modal-image" id="modalImage" src="" alt="">
         </div>
-        <button class="modal-nav modal-next" onclick="event.stopPropagation(); changeImage(1)">❯</button>
+        <button class="modal-nav modal-next" onclick="event.stopPropagation(); changeImage(1)">►</button>
         <div class="modal-info" id="modalInfo"></div>
     </div>
 
     <script>
-        const images = {{ keyframes|tojson }};
+        const keyframes = {{ keyframe_data|tojson }};
+        const images = {{ keyframes|tojson }};  // Simple array of filenames for backward compatibility
     </script>
     <script src="{{ url_for('static', filename='js/results.js') }}"></script>
 </body>
