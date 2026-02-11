@@ -1,4 +1,4 @@
-name: SoccerNet311
+name: SoccerNet311_cuda
 channels:
   - defaults
 dependencies:
@@ -126,6 +126,7 @@ dependencies:
       - kiwisolver==1.4.9
       - lark==1.3.1
       - lazy-loader==0.4
+      - libsvm==3.23.0.4
       - libsvm-official==3.36.0
       - lightning-utilities==0.15.2
       - llvmlite==0.46.0
@@ -161,6 +162,7 @@ dependencies:
       - pandocfilters==1.5.1
       - parso==0.8.5
       - pfzy==0.3.4
+      - pillow==11.3.0
       - platformdirs==4.5.0
       - pluggy==1.6.0
       - polars==1.34.0
@@ -224,7 +226,7 @@ dependencies:
       - soupsieve==2.8
       - stack-data==0.6.3
       - stringzilla==4.6.0
-      - sympy==1.14.0
+      - sympy==1.13.1
       - tensorboard==2.20.0
       - tensorboard-data-server==0.7.2
       - terminado==0.18.1
@@ -233,10 +235,10 @@ dependencies:
       - timm==0.9.12
       - tinycss2==1.4.0
       - tokenizers==0.15.2
-      - torch==2.9.1
-      - torchaudio==2.9.1
+      - torch==2.5.1+cu121
+      - torchaudio==2.5.1+cu121
       - torchmetrics==1.8.2
-      - torchvision==0.24.1
+      - torchvision==0.20.1+cu121
       - tornado==6.5.2
       - tqdm==4.67.1
       - traitlets==5.14.3
@@ -262,4 +264,4 @@ dependencies:
       - yacs==0.1.8
       - yapf==0.43.0
       - yarl==1.22.0
-prefix: C:\Users\roshi\miniconda3\envs\SoccerNet311
+prefix: C:\Users\aliaa\miniconda3\envs\SoccerNet311_cuda
