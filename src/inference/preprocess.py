@@ -163,7 +163,7 @@ def filter_low_quality_frames(
         sharp = compute_sharpness(path)
         unif = compute_uniformity(path)
         
-        # Apply filters (AND logic - frame must pass all)
+        # Apply filters 
         if lum < luminance_threshold:
             stats["dark"] += 1
             continue
@@ -229,8 +229,8 @@ def motion_blur_score(path: str) -> float:
     if img is None:
         return 0.0
     
-    # FIX: Grayscale images have shape (h, w), not (h, w, 3)
-    h, w = img.shape[:2]  # ← Change this line
+    # Grayscale images have shape (h, w), not (h, w, 3)
+    h, w = img.shape[:2]  
     
     # Downscale for speed
     if max(h, w) > 480:
