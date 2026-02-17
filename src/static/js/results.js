@@ -32,14 +32,23 @@ function openModal(index) {
     
     // Display frame info with metadata
     const infoText = `
-        Frame ${index + 1} of ${displayedImages.length} - ${imageFilename}
+        Frame ${index + 1} of ${displayedImages.length}
         | Score: ${frame.final_score.toFixed(3)}
         | IQA: ${frame.w_iqa.toFixed(3)}
         | Face: ${frame.face_signal.toFixed(3)}
         | Emotion: ${frame.emotion_intensity.toFixed(3)}
         | Pose: ${frame.pose_signal.toFixed(3)}
     `;
-    modalInfo.textContent = infoText;
+    modalInfo.innerHTML = `
+    <div class="modal-info-text">
+        ${infoText}
+    </div>
+    <div class="modal-actions">
+        <button class="btn-enhance-modal" onclick="openThumbnailEditor('${imageFilename}')">
+            Enhance Keyframe
+        </button>
+    </div>
+`;
     modal.style.display = 'block';
     
     // Prevent body scroll
@@ -111,7 +120,6 @@ function renderGallery(data) {
                 </div>
             </div>
         `;
-
         gallery.appendChild(card);
     });
 }

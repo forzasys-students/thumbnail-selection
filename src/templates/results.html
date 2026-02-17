@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Keyframe Results</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/results.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/thumbnail_editor.css') }}">
 </head>
 <body>
     <div class="header">
@@ -69,5 +70,6 @@
         const images = {{ keyframes|tojson }};  // Simple array of filenames for backward compatibility
     </script>
     <script src="{{ url_for('static', filename='js/results.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/thumbnail_editor.js') }}"></script>
 </body>
 </html>

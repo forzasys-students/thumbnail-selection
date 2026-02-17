@@ -296,3 +296,22 @@ button {
     display: flex;
     flex-direction: column;
 }
+
+.modal-actions {
+    margin-top: 15px;
+    text-align: center;
+}
+
+.btn-enhance-modal {
+    padding: 10px 20px;
+    font-weight: bold;
+    color: white;  
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.btn-enhance-modal:hover {
+    background: linear-gradient(135deg, #667eea 0%, #5a3a7f 100%);
+}
