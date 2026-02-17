@@ -22,7 +22,7 @@ class SOTAModels:
     def __init__(
         self,
         device: str = "cuda",
-        yolo_pose_path: str = "models/yolo/yolo11m-pose.pt",
+        yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
         insightface_name: str = "buffalo_l",
         debug: bool = False,
     ):
