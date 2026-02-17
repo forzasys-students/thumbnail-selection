@@ -66,20 +66,8 @@ select {
     cursor: pointer;
 }
 
-.file-input-wrapper {
-    position: relative;
-    overflow: hidden;
-    display: inline-block;
-    width: 100%;
-}
-
-.file-input-wrapper input[type="file"] {
-    cursor: pointer;
-}
-
-.file-input-wrapper::before {
-    content: 'Choose Video File';
-    display: inline-block;
+.file-btn {
+    display: block;
     padding: 12px;
     background: #f5f5f5;
     border: 2px dashed #e0e0e0;
@@ -88,12 +76,14 @@ select {
     text-align: center;
     width: 100%;
     transition: all 0.3s;
+    font-size: 14px;
 }
 
-.file-input-wrapper:hover::before {
+.file-btn:hover {
     background: #ebebeb;
     border-color: #667eea;
 }
+
 
 button {
     width: 100%;
