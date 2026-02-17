@@ -61,9 +61,9 @@ from preprocess import (
 
 # Segment-specific multiplier: boosts or penalizes final score by segment type.
 SEGMENT_SCORE_MULT = {
-    "P1_player_referee": 1.15,   # Highest - action/emotion shots (best thumbnails)
+    "P1_player_referee": 1.10,   # Highest - action/emotion shots (best thumbnails)
     "P2_corner": 1.00,           # High - set pieces, tactical moments
-    "P3_side_staff": 1.10,       # Medium - coach reactions, bench celebrations
+    "P3_side_staff": 1.05,       # Medium - coach reactions, bench celebrations
     "P4_behind_goal": 1.00,      # Baseline - goalkeeper shots, different angle
 }
 
@@ -121,10 +121,7 @@ FALLBACK_MIN_FINAL_SCORE = 0.20      # Lower score floor for fallback
 
 # Hard floors: frame must pass these to be eligible for final selection.
 MIN_FINAL_CONF = 0.40
-MIN_FINAL_SCORE = 0.30
-
-# Minimum frame gap between selected keyframes (to ensure temporal diversity)
-MIN_FRAME_GAP = 0          
+MIN_FINAL_SCORE = 0.30 
 
 # Logo detection parameters
 LOGO_CKPT_PATH = "models/logo/logo_sef_2024_resnet50.pth"
@@ -203,7 +200,6 @@ def _quota_select(all_candidates: List[dict], top_n: int) -> List[dict]:
         """
         Add up to `need` frames from sorted_list into final, respecting:
         - no duplicates by path
-        - min_frame_gap constraint against already selected frames
         """
         nonlocal final
         added = 0
@@ -215,17 +211,6 @@ def _quota_select(all_candidates: List[dict], top_n: int) -> List[dict]:
 
             # Frame index parsed from filename; used for time-gap filtering.
             ci = extract_frame_index(cand["path"])
-
-            # Check distance to already-selected frames.
-            # Enforce min_frame_gap for temporal diversity.
-            ok = True
-            for s in final:
-                si = extract_frame_index(s["path"])
-                if abs(ci - si) < MIN_FRAME_GAP:
-                    ok = False
-                    break
-            if not ok:
-                continue
 
             final.append(cand)
             used.add(cand["path"])
@@ -255,7 +240,7 @@ def select_keyframes(
     output_dir: str,
     top_n: int = 100,
     device: str = "cuda",
-    yolo_pose_path: str = "models/yolo/yolo11m-pose.pt",
+    yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
     debug: bool = True,
 ):
     """
@@ -359,9 +344,9 @@ def select_keyframes(
             print(f"[SEGMENT] id={seg_id} priority={seg_priority} frames_in_range={len(segment_frames)}")
             print("-" * 72)
 
-        # ---------------------------------------------------------------------
+        # ======================================================================
         # STAGE 1: PREPROCESSING
-        # ---------------------------------------------------------------------
+        # ======================================================================
         if debug:
             print("[PREPROCESS] >>> Stage 1: cut-mask + cheap filters (overlay/blur/texture/conf)")
 
@@ -454,9 +439,9 @@ def select_keyframes(
             continue
 
 
-        # ---------------------------------------------------------------------
+        # ======================================================================
         # STAGE 2 : LOGO DETECTION FILTER
-        # ---------------------------------------------------------------------
+        # ======================================================================
         before_logo = len(pre_items)
         paths = [it["path"] for it in pre_items]
 
@@ -488,9 +473,9 @@ def select_keyframes(
                 print(f"[LOGO] Average logo prob: {avg_prob:.3f}")
 
 
-        # ---------------------------------------------------------------------
+        # ======================================================================
         # STAGE 3: SCORING SIGNALS
-        # ---------------------------------------------------------------------
+        # ======================================================================
         if debug:
             print("[SOTA] >>> Stage 3: Scoring signals (face, emotion, pose)")
 
@@ -532,9 +517,9 @@ def select_keyframes(
             # =============================================================
 
             FACE_Q_THR = 0.40          # tune
-            FACE_AREA_MIN = 0.03       # tune (if you normalized face_area)
-            FACE_AREA_MAX = 0.30  
-            EMO_THR = 0.15             # Expressive emotion threshold
+            FACE_AREA_MIN = 0.02       # tune (if you normalized face_area)
+            FACE_AREA_MAX = 0.40  
+            EMO_THR = 0.20             # Expressive emotion threshold
             POSE_THR = 0.15            # Clear pose threshold
 
             has_good_face = (
@@ -616,9 +601,9 @@ def select_keyframes(
             candidates,
             key=lambda x: (x["keyframe_priority"], -x["rank_value"]))
 
-        # ---------------------------------------------------------------------
+        # =====================================================================
         # STAGE 4: Image Quality Assessment 
-        # ---------------------------------------------------------------------
+        # ====================================================================
         if debug:
             print("[IQA] >>> Stage 4: BATCHED TOPIQ on segment top-k")
 
@@ -656,9 +641,9 @@ def select_keyframes(
                 if debug:
                     print(f"[IQA] P1 TOPIQ gate passed: kept {len(candidates_sorted)}")
 
-        # ---------------------------------------------------------------------
+        # =====================================================================
         # STAGE 5: Calculate final score 
-        # ---------------------------------------------------------------------
+        # ====================================================================
         if debug:
             print("[SCORING] >>> Stage 5: Final score calculation")
 
@@ -790,8 +775,8 @@ def select_keyframes(
         all_candidates = reduce_redundancy(
             all_candidates,
             method="hybrid",            #  "temporal", "visual", or "hybrid" (recommended)
-            temporal_window=24,         #  Frame distance for temporal clustering (~2 sec at 30fps)
-            visual_threshold=0.90,      #  Similarity threshold (0-1, higher = stricter)
+            temporal_window=48,         #  Frame distance for temporal clustering (~2 sec at 30fps)
+            visual_threshold=0.85,      #  Similarity threshold (lower = more aggressive deduplication)
             visual_method="histogram",  #  "histogram" (color) or "phash" (structure)
             debug=debug
         )
@@ -819,14 +804,13 @@ def select_keyframes(
 
 
     # -------------------------------------------------------------------------
-    # Helper function for global ranking selection
+    # Helper function for selecting final frames
     # -------------------------------------------------------------------------
-    def select_with_time_gap(pool: List[dict], score_floor: float, max_frames: int) -> List[dict]:
+    def select_final_frames(pool: List[dict], score_floor: float, max_frames: int) -> List[dict]:
         """
         Select frames from pool using global ranking:
         1. Apply hard floors (confidence + score)
         2. Sort by final_score descending
-        3. Greedily select up to max_frames, enforcing MIN_FRAME_GAP
         
         Returns: list of selected candidates
         """
@@ -843,29 +827,12 @@ def select_keyframes(
         # Step 2: Sort by final_score (global ranking)
         eligible_sorted = sorted(eligible, key=lambda x: x["final_score"], reverse=True)
         
-        # Step 3: Greedy selection with time-gap enforcement
-        selected = []
-        for cand in eligible_sorted:
-            if len(selected) >= max_frames:
-                break
-            
-            # Check temporal gap against already-selected frames
-            ci = extract_frame_index(cand["path"])
-            ok = True
-            for s in selected:
-                si = extract_frame_index(s["path"])
-                if abs(ci - si) < MIN_FRAME_GAP:
-                    ok = False
-                    break
-            
-            if ok:
-                selected.append(cand)
-        
-        return selected
+        return eligible_sorted[:max_frames]
 
     # -------------------------------------------------------------------------
-    # SELECTION: Choose between quota-based or global ranking
+    # Segment-Quota-Based vs Global Ranking Selection
     # -------------------------------------------------------------------------
+
     if USE_QUOTA_SELECTION:
         # QUOTA-BASED: Use segment quotas to ensure diversity
         print("[FINAL] Using quota-based selection (ensures per-segment diversity)")
@@ -898,28 +865,17 @@ def select_keyframes(
                 reverse=True
             )
             
-            # Enforce min_frame_gap for fallback frames
             for c in extra:
                 if len(final_selection) >= top_n:
                     break
-                
-                ci = extract_frame_index(c["path"])
-                ok = True
-                for s in final_selection:
-                    si = extract_frame_index(s["path"])
-                    if abs(ci - si) < MIN_FRAME_GAP:
-                        ok = False
-                        break
-                
-                if ok:
-                    final_selection.append(c)
-    
+                final_selection.append(c)
+
     else:
         # GLOBAL RANKING: Select best frames overall (no segment quotas)
         print("[FINAL] Using global ranking (best frames win, segment mult already in score)")
         
         # Primary selection with strict score floor
-        final_selection = select_with_time_gap(all_candidates, MIN_FINAL_SCORE, top_n)
+        final_selection = select_final_frames(all_candidates, MIN_FINAL_SCORE, top_n)
         
         # Fallback: if we didn't get enough frames, try relaxed score floor
         if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
@@ -927,9 +883,11 @@ def select_keyframes(
             print(f"[FINAL] Trying fallback with score floor {FALLBACK_MIN_FINAL_SCORE} (conf unchanged)")
             
             # Re-run selection with relaxed floor
-            final_selection = select_with_time_gap(all_candidates, FALLBACK_MIN_FINAL_SCORE, top_n)
+            final_selection = select_final_frames(all_candidates, FALLBACK_MIN_FINAL_SCORE, top_n)
     
     print(f"[FINAL] <<< Selected: {len(final_selection)} / {top_n}\n")
+
+
 
     # -----------------------------------------------------------------------------
     # Save selected images + write final CSV.
@@ -948,7 +906,7 @@ def select_keyframes(
 
         results.append({
             # --- identity / ranking ---
-            "rank": rank + 1,                                           # Final rank after global quota selection and time-gap filtering
+            "rank": rank + 1,                                           # Final rank after all selection stages
             "segment_id": c["segment_id"],                              # Temporal segment ID this frame was selected from
             "segment_priority": pr,                                     # Semantic segment class (P1 player/referee, P2 corner, P3 staff, P4 behind goal)
             "segment_multiplier": round(c["segment_mult"], 3),          # Hierarchy boost applied to the score (higher = more important)
@@ -1039,7 +997,7 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", required=True)          # where to save keyframe images
     parser.add_argument("--top_n", type=int, default=100)       # total output keyframes
     parser.add_argument("--device", type=str, default="cuda")   # cuda or cpu
-    parser.add_argument("--yolo_pose_path", type=str, default="models/yolo/yolo11m-pose.pt")
+    parser.add_argument("--yolo_pose_path", type=str, default="models/yolo/yolo26m-pose.pt")
     parser.add_argument("--debug", action="store_true", help="Verbose stage prints inside segments")
     args = parser.parse_args()
 

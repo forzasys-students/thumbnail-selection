@@ -336,8 +336,8 @@ def hybrid_clustering(
 def reduce_redundancy(
     candidates: List[Dict],
     method: str = "hybrid",
-    temporal_window: int = 60,
-    visual_threshold: float = 0.92,
+    temporal_window: int = 48,
+    visual_threshold: float = 0.80,
     visual_method: str = "histogram",
     debug: bool = False
 ) -> List[Dict]:
@@ -390,24 +390,21 @@ def reduce_redundancy(
 """
 TUNING RECOMMENDATIONS:
 
-1. TEMPORAL_WINDOW (frame distance):
+TEMPORAL_WINDOW (frame distance):
    - 24 fps footage:
      * 24 = 1 second window
-     * 48 = 2 second window (recommended for celebrations)
-     * 72 = 3 second window (aggressive)
+     * 48 = 2 second window 
+     * 72 = 3 second window 
    - Larger = more aggressive deduplication
 
-2. VISUAL_THRESHOLD (0-1):
-   - 0.95+ = Very strict (only near-identical frames)
-   - 0.90-0.95 = Balanced (recommended)
-   - 0.85-0.90 = Aggressive (different angles may be flagged)
+VISUAL_THRESHOLD (0-1):
    - Lower = more aggressive deduplication
 
-3. VISUAL_METHOD:
+VISUAL_METHOD:
    - "histogram": Fast, good for color changes, lighting variations
    - "phash": Better for structural similarity, robust to color shifts
 
-4. METHOD:
+METHOD:
    - "hybrid": RECOMMENDED - combines temporal + visual
    - "temporal": Simple, fast, no visual analysis
    - "visual": Slow, ignores temporal proximity
