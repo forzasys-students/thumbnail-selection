@@ -1,48 +1,60 @@
 /**
- * Thumbnail Editor 
-
+ * Enhanced Thumbnail Editor with Graphics, Metadata & Templates
+ * 
+ * NEW FEATURES:
+ * - Shape elements (rectangles, badges)
+ * - Multiple font families
+ * - Logo/icon upload and placement
+ * - Metadata integration (score, player names, teams)
  */
 
 class ThumbnailEditor {
-    constructor(imageFilename, canvasId = 'thumbnail-canvas') {
-        this.imageFilename   = imageFilename;
-        this.canvas          = document.getElementById(canvasId);
-        this.ctx             = this.canvas.getContext('2d');
+    constructor(imageFilename, canvasId = 'te-canvas') {
+        this.imageFilename = imageFilename;
+        this.canvas = document.getElementById(canvasId);
+        this.ctx = this.canvas.getContext('2d');
 
-        // images
-        this.originalImage   = null;
-        this.maskImage       = null;
+        // Images
+        this.originalImage = null;
+        this.maskImage = null;
+        this.loadedLogos = {}; // cache for team logos
 
-        // state
-        this.textElements    = [];
+        // Elements (unified array for all graphic elements)
+        this.elements = []; // text, shapes, logos - all elements
+        this.selectedId = null;
+        this.isDragging = false;
+        this.dragOffset = { x: 0, y: 0 };
+
+        // Options
         this.backgroundColor = '#000000';
-        this.selectedTextId  = null;
-        this.isDragging      = false;
-        this.dragOffset      = { x: 0, y: 0 };
+        this.playerLayer = 'foreground';
+        this.blurBackground = false;
+        this.blurRadius = 12;
 
-        // new options
-        this.playerLayer     = 'foreground';  // 'foreground' | 'background'
-        this.blurBackground  = false;
-        this.blurRadius      = 12;
+        // Metadata
+        this.metadata = null; // will hold game metadata
 
-        // internal
-        this.maskAvailable      = false;
-        this.isSegmenting       = false;
-        this._blurCache         = null;   // cached blurred ImageBitmap
+        // Internal
+        this.maskAvailable = false;
+        this.isSegmenting = false;
+        this._blurCache = null;
+        this._maskFilename = null;
 
-        this.canvas.addEventListener('mousedown',  this._onMouseDown.bind(this));
-        this.canvas.addEventListener('mousemove',  this._onMouseMove.bind(this));
-        this.canvas.addEventListener('mouseup',    this._onMouseUp.bind(this));
+        // Event listeners
+        this.canvas.addEventListener('mousedown', this._onMouseDown.bind(this));
+        this.canvas.addEventListener('mousemove', this._onMouseMove.bind(this));
+        this.canvas.addEventListener('mouseup', this._onMouseUp.bind(this));
         this.canvas.addEventListener('mouseleave', this._onMouseUp.bind(this));
     }
 
     // =========================================================================
     // Init
     // =========================================================================
-    async init() {
+    async init(metadata = null) {
+        this.metadata = metadata;
         try {
             this.originalImage = await this._loadImg(`/keyframes/${this.imageFilename}`);
-            this.canvas.width  = this.originalImage.naturalWidth;
+            this.canvas.width = this.originalImage.naturalWidth;
             this.canvas.height = this.originalImage.naturalHeight;
             this._render();
         } catch (e) {
@@ -54,9 +66,9 @@ class ThumbnailEditor {
         return new Promise((res, rej) => {
             const img = new Image();
             img.crossOrigin = 'anonymous';
-            img.onload  = () => res(img);
+            img.onload = () => res(img);
             img.onerror = () => rej(new Error('Could not load ' + url));
-            img.src = url + '?t=' + Date.now(); // cache-bust
+            img.src = url + '?t=' + Date.now();
         });
     }
 
@@ -66,13 +78,13 @@ class ThumbnailEditor {
     async segmentPlayer(prompt = 'soccer player') {
         if (this.isSegmenting) return;
         this.isSegmenting = true;
-        this.showStatus('Segmenting… this may take a few seconds');
+        this.showStatus('Segmenting…');
 
         try {
-            const res  = await fetch('/api/segment-player', {
-                method:  'POST',
+            const res = await fetch('/api/segment-player', {
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify({
+                body: JSON.stringify({
                     keyframe_filename: this.imageFilename,
                     prompt: prompt.trim() || 'soccer player'
                 })
@@ -82,19 +94,15 @@ class ThumbnailEditor {
             if (!data.success) throw new Error(data.error || 'Segmentation failed');
             if (!data.mask_url) throw new Error('No mask URL returned');
 
-            // Load the mask – mask_url is like "/masks/filename_mask.png"
-            this.maskImage     = await this._loadImg(data.mask_url);
+            this.maskImage = await this._loadImg(data.mask_url);
             this.maskAvailable = true;
-            this._blurCache    = null;  // invalidate
-
-            // Store exact mask filename for download (avoids name re-derivation bugs)
+            this._blurCache = null;
             this._maskFilename = data.mask_url.split('/').pop();
 
             this._render();
             this.showStatus(`✓ Found ${data.num_persons} instance(s)`);
 
-            // Reveal the player-layer toggle
-            const row = document.getElementById('player-layer-row');
+            const row = document.getElementById('te-layer-row');
             if (row) row.classList.remove('hidden');
 
         } catch (e) {
@@ -105,282 +113,473 @@ class ThumbnailEditor {
     }
 
     // =========================================================================
-    // Core render
-    //
-    // The composition order that matches the inspiration images:
-    //
-    // playerLayer === 'foreground'  (player pops in FRONT of text):
-    //   1. Original photo (or blurred bg)
-    //   2. Background-layer text
-    //   3. Player cutout
-    //   4. Foreground-layer text
-    //
-    // playerLayer === 'background'  (player sits BEHIND text):
-    //   1. Solid colour OR blurred photo
-    //   2. Player cutout
-    //   3. Background-layer text
-    //   4. Foreground-layer text
+    // Render Pipeline
     // =========================================================================
     _render() {
         const ctx = this.ctx;
-        const w   = this.canvas.width;
-        const h   = this.canvas.height;
+        const w = this.canvas.width;
+        const h = this.canvas.height;
         ctx.clearRect(0, 0, w, h);
 
         if (!this.originalImage) return;
 
         const hasMask = this.maskAvailable && !!this.maskImage;
 
-        // ------------------------------------------------------------------
-        // BASE LAYER
-        // ------------------------------------------------------------------
+        // Base layer
         if (!hasMask) {
-            // No mask yet – just show the photo so the user sees something
             ctx.drawImage(this.originalImage, 0, 0, w, h);
-
         } else if (this.blurBackground) {
-            // Blurred photo background (player will be painted sharp later)
             this._drawBlurredBg(ctx, w, h);
-
         } else if (this.playerLayer === 'foreground') {
-            // Full original photo; player cutout will be composited on top
             ctx.drawImage(this.originalImage, 0, 0, w, h);
-
         } else {
-            // Solid colour (player behind text style)
             ctx.fillStyle = this.backgroundColor;
             ctx.fillRect(0, 0, w, h);
         }
 
-        // ------------------------------------------------------------------
-        // PLAYER BEHIND TEXT
-        // ------------------------------------------------------------------
+        // Player behind text
         if (hasMask && this.playerLayer === 'background') {
             this._drawPlayerCutout(ctx, w, h);
         }
 
-        // ------------------------------------------------------------------
-        // BACKGROUND-LAYER TEXT
-        // ------------------------------------------------------------------
-        this.textElements
-            .filter(t => t.layer === 'background')
-            .forEach(t => this._drawText(ctx, t));
+        // Background elements
+        this.elements
+            .filter(e => e.layer === 'background')
+            .forEach(e => this._drawElement(ctx, e));
 
-        // ------------------------------------------------------------------
-        // PLAYER IN FRONT OF TEXT
-        // ------------------------------------------------------------------
+        // Player in front of background elements
         if (hasMask && this.playerLayer === 'foreground') {
             this._drawPlayerCutout(ctx, w, h);
         }
 
-        // ------------------------------------------------------------------
-        // FOREGROUND-LAYER TEXT  (always on top of everything)
-        // ------------------------------------------------------------------
-        this.textElements
-            .filter(t => t.layer === 'foreground')
-            .forEach(t => this._drawText(ctx, t));
+        // Foreground elements
+        this.elements
+            .filter(e => e.layer === 'foreground')
+            .forEach(e => this._drawElement(ctx, e));
 
-        // ------------------------------------------------------------------
-        // SELECTION HIGHLIGHT
-        // ------------------------------------------------------------------
-        if (this.selectedTextId !== null) this._drawSelection(ctx);
+        // Selection highlight
+        if (this.selectedId) this._drawSelection(ctx);
     }
 
-    // ── Draw blurred photo background, then paint sharp player back on top ──
-    _drawBlurredBg(ctx, w, h) {
-        if (!this._blurCache) {
-            const off    = document.createElement('canvas');
-            off.width    = w;
-            off.height   = h;
-            const offCtx = off.getContext('2d');
-
-            // Fill with bg color first to prevent black bleed at edges from blur
-            offCtx.fillStyle = this.backgroundColor;
-            offCtx.fillRect(0, 0, w, h);
-
-            // ctx.filter IS supported in Chrome/Edge/Firefox for 2d canvas
-            offCtx.filter = `blur(${this.blurRadius}px)`;
-            offCtx.drawImage(this.originalImage, 0, 0, w, h);
-            offCtx.filter = 'none';
-
-            this._blurCache = off;
+    // ── Draw any element (text, shape, logo) ─────────────────────────────────
+    _drawElement(ctx, el) {
+        switch (el.type) {
+            case 'text': this._drawText(ctx, el); break;
+            case 'rect': this._drawRect(ctx, el); break;
+            case 'logo': this._drawLogo(ctx, el); break;
         }
-        ctx.drawImage(this._blurCache, 0, 0);
     }
 
-    // ── Paste the segmented player cutout ────────────────────────────────────
-    _drawPlayerCutout(ctx, w, h) {
-        // The mask PNG from SAM3 is a GREYSCALE image (white=player, black=bg).
-        // Canvas destination-in uses the alpha of the mask pixels, NOT brightness.
-        // A greyscale PNG loaded as <img> has alpha=255 everywhere → mask is ignored.
-        //
-        // Fix: manually copy mask brightness into alpha channel of the player image.
-        const maskCanvas    = document.createElement('canvas');
-        maskCanvas.width    = w;
-        maskCanvas.height   = h;
-        const maskCtx       = maskCanvas.getContext('2d');
-        maskCtx.drawImage(this.maskImage, 0, 0, w, h);
-        const maskData      = maskCtx.getImageData(0, 0, w, h).data;
-
-        const tmp    = document.createElement('canvas');
-        tmp.width    = w;
-        tmp.height   = h;
-        const tmpCtx = tmp.getContext('2d');
-        tmpCtx.drawImage(this.originalImage, 0, 0, w, h);
-        const imgData = tmpCtx.getImageData(0, 0, w, h);
-
-        // Set each pixel's alpha to the mask's red channel (greyscale = R=G=B)
-        for (let i = 0; i < imgData.data.length; i += 4) {
-            imgData.data[i + 3] = maskData[i]; // R of greyscale = brightness = desired alpha
-        }
-        tmpCtx.putImageData(imgData, 0, 0);
-        ctx.drawImage(tmp, 0, 0);
-    }
-
-    // ── Draw text with outline ────────────────────────────────────────────────
-    _drawText(ctx, t) {
-        const { content, x, y, fontSize, color, strokeColor, strokeWidth, fontFamily } = t;
-        ctx.font         = `bold ${fontSize}px ${fontFamily || 'Impact'}, Arial Black, sans-serif`;
-        ctx.textAlign    = 'left';
+    // ── Text ──────────────────────────────────────────────────────────────────
+    _drawText(ctx, el) {
+        const { content, x, y, fontSize, color, strokeColor, strokeWidth, fontFamily, fontWeight } = el;
+        ctx.font = `${fontWeight || 'bold'} ${fontSize}px ${fontFamily || 'Impact'}, Arial Black, sans-serif`;
+        ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
 
         if (strokeWidth > 0) {
-            ctx.lineJoin    = 'round';
+            ctx.lineJoin = 'round';
             ctx.strokeStyle = strokeColor || '#000000';
-            ctx.lineWidth   = strokeWidth;
+            ctx.lineWidth = strokeWidth;
             ctx.strokeText(content, x, y);
         }
         ctx.fillStyle = color || '#ffffff';
         ctx.fillText(content, x, y);
     }
 
-    // ── Dashed selection rect around selected text ────────────────────────────
+    // ── Rectangle ─────────────────────────────────────────────────────────────
+    _drawRect(ctx, el) {
+        const { x, y, width, height, fillColor, strokeColor, strokeWidth, cornerRadius } = el;
+
+        if (cornerRadius > 0) {
+            ctx.beginPath();
+            ctx.roundRect(x, y, width, height, cornerRadius);
+            ctx.closePath();
+        } else {
+            ctx.beginPath();
+            ctx.rect(x, y, width, height);
+            ctx.closePath();
+        }
+
+        if (fillColor) {
+            ctx.fillStyle = fillColor;
+            ctx.fill();
+        }
+        if (strokeWidth > 0 && strokeColor) {
+            ctx.strokeStyle = strokeColor;
+            ctx.lineWidth = strokeWidth;
+            ctx.stroke();
+        }
+    }
+
+    // ── Logo ──────────────────────────────────────────────────────────────────
+    _drawLogo(ctx, el) {
+        const { x, y, width, height, imageUrl } = el;
+        const img = this.loadedLogos[imageUrl];
+        if (img && img.complete) {
+            ctx.drawImage(img, x, y, width, height);
+        }
+    }
+
+    // ── Blurred background ────────────────────────────────────────────────────
+    _drawBlurredBg(ctx, w, h) {
+        if (!this._blurCache) {
+            const off = document.createElement('canvas');
+            off.width = w;
+            off.height = h;
+            const offCtx = off.getContext('2d');
+            offCtx.fillStyle = this.backgroundColor;
+            offCtx.fillRect(0, 0, w, h);
+            offCtx.filter = `blur(${this.blurRadius}px)`;
+            offCtx.drawImage(this.originalImage, 0, 0, w, h);
+            offCtx.filter = 'none';
+            this._blurCache = off;
+        }
+        ctx.drawImage(this._blurCache, 0, 0);
+    }
+
+    // ── Player cutout ─────────────────────────────────────────────────────────
+    _drawPlayerCutout(ctx, w, h) {
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = w;
+        maskCanvas.height = h;
+        const maskCtx = maskCanvas.getContext('2d');
+        maskCtx.drawImage(this.maskImage, 0, 0, w, h);
+        const maskData = maskCtx.getImageData(0, 0, w, h).data;
+
+        const tmp = document.createElement('canvas');
+        tmp.width = w;
+        tmp.height = h;
+        const tmpCtx = tmp.getContext('2d');
+        tmpCtx.drawImage(this.originalImage, 0, 0, w, h);
+        const imgData = tmpCtx.getImageData(0, 0, w, h);
+
+        for (let i = 0; i < imgData.data.length; i += 4) {
+            imgData.data[i + 3] = maskData[i];
+        }
+        tmpCtx.putImageData(imgData, 0, 0);
+        ctx.drawImage(tmp, 0, 0);
+    }
+
+    // ── Selection highlight ───────────────────────────────────────────────────
     _drawSelection(ctx) {
-        const t = this.textElements.find(el => el.id === this.selectedTextId);
-        if (!t) return;
-        ctx.font = `bold ${t.fontSize}px ${t.fontFamily || 'Impact'}, Arial Black, sans-serif`;
-        const tw = ctx.measureText(t.content).width;
-        const th = t.fontSize * 1.2;
+        const el = this.elements.find(e => e.id === this.selectedId);
+        if (!el) return;
+
+        let x, y, w, h;
+        if (el.type === 'text') {
+            ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
+            w = ctx.measureText(el.content).width;
+            h = el.fontSize * 1.2;
+            x = el.x;
+            y = el.y;
+        } else if (el.type === 'rect') {
+            x = el.x;
+            y = el.y;
+            w = el.width;
+            h = el.height;
+        } else if (el.type === 'logo') {
+            x = el.x;
+            y = el.y;
+            w = el.width;
+            h = el.height;
+        }
+
         ctx.strokeStyle = '#00cfff';
-        ctx.lineWidth   = 2;
+        ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
-        ctx.strokeRect(t.x - 6, t.y - 6, tw + 12, th + 12);
+        ctx.strokeRect(x - 6, y - 6, w + 12, h + 12);
         ctx.setLineDash([]);
     }
 
     // =========================================================================
-    // Text management
+    // Element Management
     // =========================================================================
-    addText(content = 'HIGHLIGHTS', x = 80, y = 80, opts = {}) {
+    addText(content = 'TEXT', x = 80, y = 80, opts = {}) {
         const el = {
-            id:          Date.now(),
+            id: Date.now(),
+            type: 'text',
             content,
-            x, y,
-            fontSize:    opts.fontSize    ?? 140,
-            color:       opts.color       ?? '#ffffff',
-            strokeColor: opts.strokeColor ?? '#000000',
-            strokeWidth: opts.strokeWidth ?? 8,
-            fontFamily:  opts.fontFamily  ?? 'Impact',
-            layer:       opts.layer       ?? 'background'
+            x,
+            y,
+            fontSize: opts.fontSize || 140,
+            color: opts.color || '#ffffff',
+            strokeColor: opts.strokeColor || '#000000',
+            strokeWidth: opts.strokeWidth || 8,
+            fontFamily: opts.fontFamily || 'Impact',
+            fontWeight: opts.fontWeight || 'bold',
+            layer: opts.layer || 'background'
         };
-        this.textElements.push(el);
-        this.selectedTextId = el.id;
+        this.elements.push(el);
+        this.selectedId = el.id;
         this._render();
-        this._emitTextList();
+        this._emitElements();
         return el.id;
     }
 
-    updateText(id, changes) {
-        const el = this.textElements.find(t => t.id === id);
-        if (!el) return;
-        Object.assign(el, changes);
+    addRect(x = 50, y = 50, opts = {}) {
+        const el = {
+            id: Date.now(),
+            type: 'rect',
+            x,
+            y,
+            width: opts.width || 200,
+            height: opts.height || 100,
+            fillColor: opts.fillColor || '#1a73e8',
+            strokeColor: opts.strokeColor || null,
+            strokeWidth: opts.strokeWidth || 0,
+            cornerRadius: opts.cornerRadius || 0,
+            layer: opts.layer || 'background'
+        };
+        this.elements.push(el);
+        this.selectedId = el.id;
         this._render();
-        this._emitTextList();
+        this._emitElements();
+        return el.id;
     }
 
-    deleteText(id) {
-        this.textElements = this.textElements.filter(t => t.id !== id);
-        if (this.selectedTextId === id) this.selectedTextId = null;
+    async addLogo(imageUrl, x = 50, y = 50, opts = {}) {
+        if (!this.loadedLogos[imageUrl]) {
+            this.loadedLogos[imageUrl] = await this._loadImg(imageUrl);
+        }
+
+        const el = {
+            id: Date.now(),
+            type: 'logo',
+            imageUrl,
+            x,
+            y,
+            width: opts.width || 100,
+            height: opts.height || 100,
+            layer: opts.layer || 'foreground'
+        };
+        this.elements.push(el);
+        this.selectedId = el.id;
         this._render();
-        this._emitTextList();
+        this._emitElements();
+        return el.id;
     }
+
+    // ── Add both team logos from metadata ─────────────────────────────────────
+    async addTeamLogos() {
+        if (!this.metadata) {
+            this.showError('No metadata loaded for this keyframe');
+            return;
+        }
+        const { home_team_logo, visiting_team_logo, home_team_short, visiting_team_short } = this.metadata;
+        const w = this.canvas.width;
+
+        if (!home_team_logo && !visiting_team_logo) {
+            this.showError('No team logos found in metadata');
+            return;
+        }
+
+        const SIZE = Math.round(w * 0.12);   // ~12% of canvas width
+        const PAD  = Math.round(w * 0.03);
+
+        if (home_team_logo) {
+            this.showStatus(`Loading ${home_team_short || 'home'} logo…`);
+            await this.addLogo(home_team_logo, PAD, PAD, {
+                width: SIZE, height: SIZE, layer: 'foreground'
+            });
+        }
+        if (visiting_team_logo) {
+            this.showStatus(`Loading ${visiting_team_short || 'away'} logo…`);
+            await this.addLogo(visiting_team_logo, w - SIZE - PAD, PAD, {
+                width: SIZE, height: SIZE, layer: 'foreground'
+            });
+        }
+        this.showStatus('✓ Team logos added');
+    }
+
+    // ── Add score overlay from metadata ───────────────────────────────────────
+    addScore() {
+        if (!this.metadata) {
+            this.showError('No metadata loaded for this keyframe');
+            return;
+        }
+        const { score, home_team_short, visiting_team_short, game_time } = this.metadata;
+
+        if (!score) {
+            this.showError('No score found in metadata');
+            return;
+        }
+
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+
+        const BAR_W  = Math.round(w * 0.38);
+        const BAR_H  = Math.round(h * 0.11);
+        const BAR_X  = Math.round((w - BAR_W) / 2);
+        const BAR_Y  = Math.round(h * 0.04);
+
+        // Dark pill background
+        this.addRect(BAR_X, BAR_Y, {
+            width: BAR_W,
+            height: BAR_H,
+            fillColor: '#000000cc',
+            strokeColor: '#ffffff44',
+            strokeWidth: 2,
+            cornerRadius: 12,
+            layer: 'foreground'
+        });
+
+        const fontSize = Math.round(BAR_H * 0.55);
+        const smallFs  = Math.round(BAR_H * 0.30);
+        const midY     = BAR_Y + Math.round(BAR_H * 0.18);
+
+        // Home team short name (left)
+        if (home_team_short) {
+            this.addText(home_team_short.toUpperCase(), BAR_X + Math.round(BAR_W * 0.04), midY + Math.round((BAR_H - smallFs) / 2) - 4, {
+                fontSize: smallFs,
+                color: '#ffffff',
+                strokeWidth: 0,
+                fontFamily: 'Arial Black',
+                layer: 'foreground'
+            });
+        }
+
+        // Score (centre)
+        this.addText(score, BAR_X + Math.round(BAR_W * 0.38), midY, {
+            fontSize,
+            color: '#ffffff',
+            strokeColor: '#000000',
+            strokeWidth: 3,
+            fontFamily: 'Impact',
+            layer: 'foreground'
+        });
+
+        // Away team short name (right)
+        if (visiting_team_short) {
+            this.addText(visiting_team_short.toUpperCase(), BAR_X + Math.round(BAR_W * 0.72), midY + Math.round((BAR_H - smallFs) / 2) - 4, {
+                fontSize: smallFs,
+                color: '#ffffff',
+                strokeWidth: 0,
+                fontFamily: 'Arial Black',
+                layer: 'foreground'
+            });
+        }
+
+        // Game time badge (small, top-right of bar)
+        if (game_time) {
+            this.addText(game_time, BAR_X + BAR_W + 8, BAR_Y + 4, {
+                fontSize: Math.round(BAR_H * 0.28),
+                color: '#ffcc00',
+                strokeColor: '#000000',
+                strokeWidth: 2,
+                fontFamily: 'Impact',
+                layer: 'foreground'
+            });
+        }
+
+        this.showStatus('✓ Score overlay added');
+    }
+
+    updateElement(id, updates) {
+        const el = this.elements.find(e => e.id === id);
+        if (!el) return;
+        Object.assign(el, updates);
+        this._render();
+        this._emitElements();
+    }
+
+    deleteElement(id) {
+        this.elements = this.elements.filter(e => e.id !== id);
+        if (this.selectedId === id) this.selectedId = null;
+        this._render();
+        this._emitElements();
+    }
+
 
     // =========================================================================
-    // Mouse – scale-corrected so drag works when canvas is CSS-scaled
+    // Mouse Interaction
     // =========================================================================
     _canvasXY(e) {
-        const r  = this.canvas.getBoundingClientRect();
+        const r = this.canvas.getBoundingClientRect();
         return {
-            x: (e.clientX - r.left) * (this.canvas.width  / r.width),
-            y: (e.clientY - r.top)  * (this.canvas.height / r.height)
+            x: (e.clientX - r.left) * (this.canvas.width / r.width),
+            y: (e.clientY - r.top) * (this.canvas.height / r.height)
         };
     }
 
-    _textHit(px, py, t) {
-        this.ctx.font = `bold ${t.fontSize}px ${t.fontFamily || 'Impact'}, Arial Black, sans-serif`;
-        const w = this.ctx.measureText(t.content).width;
-        const h = t.fontSize * 1.2;
-        return px >= t.x && px <= t.x + w && py >= t.y && py <= t.y + h;
+    _hitTest(px, py, el) {
+        if (el.type === 'text') {
+            this.ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
+            const w = this.ctx.measureText(el.content).width;
+            const h = el.fontSize * 1.2;
+            return px >= el.x && px <= el.x + w && py >= el.y && py <= el.y + h;
+        } else if (el.type === 'rect') {
+            return px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.y + el.height;
+        } else if (el.type === 'badge') {
+            return px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.y + el.height;
+        } else if (el.type === 'logo') {
+            return px >= el.x && px <= el.x + el.width && py >= el.y && py <= el.y + el.height;
+        }
+        return false;
     }
 
     _onMouseDown(e) {
         const { x, y } = this._canvasXY(e);
-        for (const t of [...this.textElements].reverse()) {
-            if (this._textHit(x, y, t)) {
-                this.selectedTextId = t.id;
-                this.isDragging     = true;
-                this.dragOffset     = { x: x - t.x, y: y - t.y };
+        for (const el of [...this.elements].reverse()) {
+            if (this._hitTest(x, y, el)) {
+                this.selectedId = el.id;
+                this.isDragging = true;
+                this.dragOffset = { x: x - el.x, y: y - el.y };
                 this._render();
-                this._emitTextList();
+                this._emitElements();
                 return;
             }
         }
-        this.selectedTextId = null;
+        this.selectedId = null;
         this._render();
-        this._emitTextList();
+        this._emitElements();
     }
 
     _onMouseMove(e) {
         const { x, y } = this._canvasXY(e);
-        if (this.isDragging && this.selectedTextId) {
-            const t = this.textElements.find(el => el.id === this.selectedTextId);
-            if (t) { t.x = x - this.dragOffset.x; t.y = y - this.dragOffset.y; this._render(); }
+        if (this.isDragging && this.selectedId) {
+            const el = this.elements.find(e => e.id === this.selectedId);
+            if (el) {
+                el.x = x - this.dragOffset.x;
+                el.y = y - this.dragOffset.y;
+                this._render();
+            }
         } else {
-            const over = this.textElements.some(t => this._textHit(x, y, t));
+            const over = this.elements.some(el => this._hitTest(x, y, el));
             this.canvas.style.cursor = over ? 'move' : 'default';
         }
     }
 
-    _onMouseUp() { this.isDragging = false; }
+    _onMouseUp() {
+        this.isDragging = false;
+    }
 
     // =========================================================================
     // Download
     // =========================================================================
     async downloadThumbnail() {
-        this.showStatus('Rendering final thumbnail…');
+        this.showStatus('Rendering…');
         try {
-            // Use the exact mask filename returned by the segmentation API,
-            // not a re-derived name (avoids mismatch if stem differs).
             const maskFilename = this._maskFilename || null;
 
             const res = await fetch('/api/create-thumbnail', {
-                method:  'POST',
+                method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     keyframe_filename: this.imageFilename,
-                    mask_filename:     maskFilename,
-                    text_elements:     this.textElements,
-                    background_color:  this.backgroundColor,
-                    player_layer:      this.playerLayer,
-                    blur_background:   this.blurBackground,
-                    blur_radius:       this.blurRadius
+                    mask_filename: maskFilename,
+                    elements: this.elements,
+                    background_color: this.backgroundColor,
+                    player_layer: this.playerLayer,
+                    blur_background: this.blurBackground,
+                    blur_radius: this.blurRadius
                 })
             });
             const data = await res.json();
             if (!data.success) throw new Error(data.error);
 
             const a = document.createElement('a');
-            a.href     = data.thumbnail_url + '?t=' + Date.now();
+            a.href = data.thumbnail_url + '?t=' + Date.now();
             a.download = `thumbnail_${Date.now()}.png`;
             document.body.appendChild(a);
             a.click();
@@ -392,11 +591,11 @@ class ThumbnailEditor {
     }
 
     // =========================================================================
-    // Events & status
+    // Events
     // =========================================================================
-    _emitTextList() {
-        document.dispatchEvent(new CustomEvent('textListChanged', {
-            detail: { textElements: this.textElements, selectedId: this.selectedTextId }
+    _emitElements() {
+        document.dispatchEvent(new CustomEvent('elementsChanged', {
+            detail: { elements: this.elements, selectedId: this.selectedId }
         }));
     }
 
@@ -411,18 +610,21 @@ class ThumbnailEditor {
 
 
 // =============================================================================
-// UI  (modal, controls, event wiring)
+// UI Integration
 // =============================================================================
 
-function openThumbnailEditor(filename) {
+function openThumbnailEditor(filename, metadata = null) {
     let modal = document.getElementById('te-modal');
-    if (!modal) { modal = _buildModal(); document.body.appendChild(modal); }
+    if (!modal) {
+        modal = _buildModal();
+        document.body.appendChild(modal);
+    }
 
-    // Reset every time it opens
     modal.style.display = 'flex';
+
     const editor = new ThumbnailEditor(filename, 'te-canvas');
     window._editor = editor;
-    editor.init();
+    editor.init(metadata);
     _wireControls(editor);
 }
 
@@ -432,41 +634,69 @@ function closeThumbnailEditor() {
     window._editor = null;
 }
 
-// Expose helpers called from inline onclick
-function teSegment()        { const p = document.getElementById('te-prompt'); window._editor.segmentPlayer(p ? p.value : ''); }
-function teAddText()        { const v = prompt('Enter text:', 'HIGHLIGHTS'); if (v) window._editor.addText(v); }
-function teDelText(id)      { window._editor.deleteText(id); }
-function teProp(id,k,v)     { window._editor.updateText(id, {[k]: v}); }
-function teBgColor(v)       { window._editor.backgroundColor = v; window._editor._render(); }
-function teDownload()       { window._editor.downloadThumbnail(); }
-
+// Expose helpers
+function teSegment() {
+    const p = document.getElementById('te-prompt');
+    window._editor.segmentPlayer(p ? p.value : '');
+}
+function teAddText() {
+    const v = prompt('Enter text:', 'HIGHLIGHTS');
+    if (v) window._editor.addText(v);
+}
+function teAddRect() {
+    window._editor.addRect(100, 100, { width: 300, height: 150, fillColor: '#1a73e8', cornerRadius: 8 });
+}
+function teDelElement(id) {
+    window._editor.deleteElement(id);
+}
+function teProp(id, k, v) {
+    window._editor.updateElement(id, { [k]: v });
+}
+function teBgColor(v) {
+    window._editor.backgroundColor = v;
+    window._editor._render();
+}
+function teDownload() {
+    window._editor.downloadThumbnail();
+}
 function tePlayerLayer(layer) {
     window._editor.playerLayer = layer;
     window._editor._render();
     document.getElementById('te-pl-bg').classList.toggle('active', layer === 'background');
     document.getElementById('te-pl-fg').classList.toggle('active', layer === 'foreground');
 }
-
 function teBlur(checked) {
-    window._editor.blurBackground  = checked;
-    window._editor._blurCache      = null;
+    window._editor.blurBackground = checked;
+    window._editor._blurCache = null;
     window._editor._render();
     const row = document.getElementById('te-blur-row');
     if (row) row.classList.toggle('hidden', !checked);
 }
-
 function teBlurRadius(v) {
-    window._editor.blurRadius  = parseInt(v);
-    window._editor._blurCache  = null;
+    window._editor.blurRadius = parseInt(v);
+    window._editor._blurCache = null;
     window._editor._render();
     const d = document.getElementById('te-blur-val');
     if (d) d.textContent = v + 'px';
 }
+function teApplyTemplate(name) {
+    window._editor.applyTemplate(name);
+}
+function teAddTeamLogos() {
+    window._editor.addTeamLogos();
+}
+function teAddScore() {
+    window._editor.addScore();
+}
 
-// ── Build modal DOM ───────────────────────────────────────────────────────────
+// ... continue in next message with modal HTML and element list UI
+
+// =============================================================================
+// Modal HTML with enhanced controls
+// =============================================================================
 function _buildModal() {
     const m = document.createElement('div');
-    m.id        = 'te-modal';
+    m.id = 'te-modal';
     m.className = 'thumbnail-modal';
     m.innerHTML = `
     <div class="modal-backdrop" onclick="closeThumbnailEditor()"></div>
@@ -488,25 +718,51 @@ function _buildModal() {
         <!-- Controls -->
         <div class="controls-panel">
 
+
+          <!-- Add Elements -->
+          <section class="control-section">
+            <h3>Add Elements</h3>
+            <div class="add-buttons">
+              <button class="btn-add" onclick="teAddText()">+ Text</button>
+              <button class="btn-add" onclick="teAddRect()">+ Rectangle</button>
+            </div>
+            <div id="te-meta-buttons" class="meta-buttons hidden">
+              <button class="btn-add btn-meta" onclick="teAddTeamLogos()">⚽ + Team Logos</button>
+              <button class="btn-add btn-meta" onclick="teAddScore()">🏆 + Score</button>
+            </div>
+          </section>
+
+          <!-- Metadata info panel -->
+          <div id="te-meta-panel" class="meta-panel hidden">
+            <div class="meta-panel-inner">
+              <div class="meta-match">
+                <span id="te-meta-home" class="meta-team">—</span>
+                <span id="te-meta-score" class="meta-score-badge">— : —</span>
+                <span id="te-meta-away" class="meta-team">—</span>
+              </div>
+              <div class="meta-detail">
+                <span id="te-meta-time"></span>
+                <span id="te-meta-event"></span>
+              </div>
+            </div>
+          </div>
+
           <!-- Segmentation -->
           <section class="control-section">
-            <h3>Segment</h3>
+            <h3>Player Segmentation</h3>
             <label class="field-label">Prompt</label>
             <input id="te-prompt" class="prompt-input" type="text"
-                   value="soccer player"
-                   placeholder="e.g. goalkeeper, celebrating player…" />
-            <button class="btn-primary" onclick="teSegment()">⬡ Run Segmentation</button>
+                   value="soccer player" placeholder="e.g. goalkeeper…" />
+            <button class="btn-primary" onclick="teSegment()">Run Segmentation</button>
 
-            <!-- Player layer – hidden until mask ready -->
             <div id="te-layer-row" class="player-layer-row hidden">
               <label class="field-label">Player layer</label>
               <div class="layer-toggle-group">
-                <button id="te-pl-bg" class="layer-toggle-btn"       onclick="tePlayerLayer('background')">Behind text</button>
-                <button id="te-pl-fg" class="layer-toggle-btn active" onclick="tePlayerLayer('foreground')">In front of text</button>
+                <button id="te-pl-bg" class="layer-toggle-btn" onclick="tePlayerLayer('background')">Behind</button>
+                <button id="te-pl-fg" class="layer-toggle-btn active" onclick="tePlayerLayer('foreground')">Front</button>
               </div>
             </div>
 
-            <!-- Blur -->
             <label class="checkbox-row">
               <input type="checkbox" id="te-blur-chk" onchange="teBlur(this.checked)" />
               <span class="checkbox-label">Blur background</span>
@@ -518,16 +774,15 @@ function _buildModal() {
             </div>
           </section>
 
-          <!-- Text -->
+          <!-- Elements List -->
           <section class="control-section">
-            <h3>Text</h3>
-            <button class="btn-secondary" onclick="teAddText()">+ Add Text</button>
-            <div id="te-textlist"></div>
+            <h3>Elements</h3>
+            <div id="te-elements"></div>
           </section>
 
           <!-- Background -->
           <section class="control-section">
-            <h3>Background colour</h3>
+            <h3>Background</h3>
             <label class="color-row">
               Color <input type="color" id="te-bg-color" value="#000000" onchange="teBgColor(this.value)" />
             </label>
@@ -544,77 +799,139 @@ function _buildModal() {
     return m;
 }
 
-// ── Wire control events ───────────────────────────────────────────────────────
+// =============================================================================
+// Wire controls
+// =============================================================================
 function _wireControls(editor) {
-    // Remove and re-add listeners to avoid duplicates on re-open
-    document.removeEventListener('textListChanged', _onTextListChanged);
-    document.removeEventListener('editorStatus',    _onEditorStatus);
-    document.addEventListener('textListChanged', _onTextListChanged);
-    document.addEventListener('editorStatus',    _onEditorStatus);
+    document.removeEventListener('elementsChanged', _onElementsChanged);
+    document.removeEventListener('editorStatus', _onEditorStatus);
+    document.addEventListener('elementsChanged', _onElementsChanged);
+    document.addEventListener('editorStatus', _onEditorStatus);
 
-    // Reset UI state
     const layerRow = document.getElementById('te-layer-row');
     if (layerRow) layerRow.classList.add('hidden');
-    const blurChk  = document.getElementById('te-blur-chk');
-    if (blurChk)  blurChk.checked = false;
-    const blurRow  = document.getElementById('te-blur-row');
-    if (blurRow)  blurRow.classList.add('hidden');
-    const textList = document.getElementById('te-textlist');
-    if (textList) textList.innerHTML = '<p class="empty-text-list">No text yet</p>';
+    const blurChk = document.getElementById('te-blur-chk');
+    if (blurChk) blurChk.checked = false;
+    const blurRow = document.getElementById('te-blur-row');
+    if (blurRow) blurRow.classList.add('hidden');
+    const elList = document.getElementById('te-elements');
+    if (elList) elList.innerHTML = '<p class="empty-text-list">No elements yet</p>';
+
+    // Show/hide metadata-driven controls depending on whether we have metadata
+    const metaButtons = document.getElementById('te-meta-buttons');
+    const metaPanel   = document.getElementById('te-meta-panel');
+
+    if (editor.metadata) {
+        const m = editor.metadata;
+        if (metaButtons) metaButtons.classList.remove('hidden');
+        if (metaPanel)   metaPanel.classList.remove('hidden');
+
+        // Populate the info strip
+        const homeEl  = document.getElementById('te-meta-home');
+        const awayEl  = document.getElementById('te-meta-away');
+        const scoreEl = document.getElementById('te-meta-score');
+        const timeEl  = document.getElementById('te-meta-time');
+        const evtEl   = document.getElementById('te-meta-event');
+
+        if (homeEl)  homeEl.textContent  = m.home_team_short  || m.home_team  || '—';
+        if (awayEl)  awayEl.textContent  = m.visiting_team_short || m.visiting_team || '—';
+        if (scoreEl) scoreEl.textContent = m.score || '—';
+        if (timeEl)  timeEl.textContent  = m.game_time  ? `⏱ ${m.game_time}` : '';
+        if (evtEl)   evtEl.textContent   = m.event_type ? `· ${m.event_type}` : '';
+    } else {
+        if (metaButtons) metaButtons.classList.add('hidden');
+        if (metaPanel)   metaPanel.classList.add('hidden');
+    }
 }
 
 function _onEditorStatus(e) {
     const el = document.getElementById('te-status');
     if (!el) return;
     el.textContent = e.detail.msg;
-    el.className   = 'status-message ' + e.detail.type;
+    el.className = 'status-message ' + e.detail.type;
     clearTimeout(el._t);
-    el._t = setTimeout(() => { el.textContent = ''; el.className = 'status-message'; }, 4000);
+    el._t = setTimeout(() => {
+        el.textContent = '';
+        el.className = 'status-message';
+    }, 4000);
 }
 
-function _onTextListChanged(e) {
-    const list = document.getElementById('te-textlist');
+function _onElementsChanged(e) {
+    const list = document.getElementById('te-elements');
     if (!list) return;
-    const { textElements, selectedId } = e.detail;
+    const { elements, selectedId } = e.detail;
 
-    if (!textElements.length) {
-        list.innerHTML = '<p class="empty-text-list">No text yet</p>';
+    if (!elements.length) {
+        list.innerHTML = '<p class="empty-text-list">No elements yet</p>';
         return;
     }
 
     list.innerHTML = '';
-    textElements.forEach(t => {
+    elements.forEach(el => {
         const div = document.createElement('div');
-        div.className = 'text-item' + (t.id === selectedId ? ' selected' : '');
+        div.className = 'element-item' + (el.id === selectedId ? ' selected' : '');
+
+        let title = '';
+        let controls = '';
+
+        if (el.type === 'text') {
+            title = `📝 ${el.content}`;
+            controls = `
+                <label>Text <input type="text" value="${el.content.replace(/"/g, '&quot;')}"
+                       onchange="teProp(${el.id},'content',this.value)" /></label>
+                <label>Size <input type="number" value="${el.fontSize}" min="10" max="500"
+                       onchange="teProp(${el.id},'fontSize',+this.value)" /></label>
+                <label>Font
+                    <select onchange="teProp(${el.id},'fontFamily',this.value)">
+                        <option value="Impact" ${el.fontFamily === 'Impact' ? 'selected' : ''}>Impact</option>
+                        <option value="Arial Black" ${el.fontFamily === 'Arial Black' ? 'selected' : ''}>Arial Black</option>
+                        <option value="Bebas Neue" ${el.fontFamily === 'Bebas Neue' ? 'selected' : ''}>Bebas Neue</option>
+                        <option value="Montserrat" ${el.fontFamily === 'Montserrat' ? 'selected' : ''}>Montserrat</option>
+                        <option value="Oswald" ${el.fontFamily === 'Oswald' ? 'selected' : ''}>Oswald</option>
+                    </select>
+                </label>
+                <label>Color <input type="color" value="${el.color}"
+                       onchange="teProp(${el.id},'color',this.value)" /></label>
+                <label>Outline <input type="color" value="${el.strokeColor}"
+                       onchange="teProp(${el.id},'strokeColor',this.value)" /></label>
+            `;
+        } else if (el.type === 'rect') {
+            title = `▭ Rectangle`;
+            controls = `
+                <label>Width <input type="number" value="${el.width}" min="10" max="2000"
+                       onchange="teProp(${el.id},'width',+this.value)" /></label>
+                <label>Height <input type="number" value="${el.height}" min="10" max="2000"
+                       onchange="teProp(${el.id},'height',+this.value)" /></label>
+                <label>Fill <input type="color" value="${el.fillColor}"
+                       onchange="teProp(${el.id},'fillColor',this.value)" /></label>
+                <label>Corner <input type="number" value="${el.cornerRadius}" min="0" max="50"
+                       onchange="teProp(${el.id},'cornerRadius',+this.value)" /></label>
+            `;
+        } else if (el.type === 'logo') {
+            title = `🖼 Logo`;
+            controls = `
+                <label>Width <input type="number" value="${el.width}" min="10" max="500"
+                       onchange="teProp(${el.id},'width',+this.value)" /></label>
+                <label>Height <input type="number" value="${el.height}" min="10" max="500"
+                       onchange="teProp(${el.id},'height',+this.value)" /></label>
+            `;
+        }
+
         div.innerHTML = `
-          <div class="text-item-header">
-            <strong>${t.content}</strong>
-            <button class="btn-delete" onclick="teDelText(${t.id})">&times;</button>
+          <div class="element-header">
+            <strong>${title}</strong>
+            <button class="btn-delete" onclick="teDelElement(${el.id})">&times;</button>
           </div>
-          <div class="text-item-controls">
-            <label>Text
-              <input type="text" value="${t.content.replace(/"/g,'&quot;')}"
-                     onchange="teProp(${t.id},'content',this.value)" />
-            </label>
-            <label>Size
-              <input type="number" value="${t.fontSize}" min="10" max="500"
-                     onchange="teProp(${t.id},'fontSize',+this.value)" />
-            </label>
-            <label>Colour
-              <input type="color" value="${t.color}"
-                     onchange="teProp(${t.id},'color',this.value)" />
-            </label>
-            <label>Outline
-              <input type="color" value="${t.strokeColor}"
-                     onchange="teProp(${t.id},'strokeColor',this.value)" />
-            </label>
+          <div class="element-controls">
+            ${controls}
             <label>Layer
-              <select onchange="teProp(${t.id},'layer',this.value)">
-                <option value="background" ${t.layer==='background'?'selected':''}>Behind player</option>
-                <option value="foreground" ${t.layer==='foreground'?'selected':''}>In front of player</option>
+              <select onchange="teProp(${el.id},'layer',this.value)">
+                <option value="background" ${el.layer === 'background' ? 'selected' : ''}>Behind player</option>
+                <option value="foreground" ${el.layer === 'foreground' ? 'selected' : ''}>In front</option>
               </select>
             </label>
-          </div>`;
+          </div>
+        `;
         list.appendChild(div);
     });
 }

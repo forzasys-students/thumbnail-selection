@@ -1,6 +1,6 @@
 let currentImageIndex = 0;
-let displayedFrames = []; // Track currently displayed metadata
-let displayedImages = []; // Track currently displayed image filenames
+let displayedFrames = [];
+let displayedImages = [];
 
 function setView(view) {
     const gallery = document.getElementById('gallery');
@@ -22,15 +22,12 @@ function openModal(index) {
     const modalImage = document.getElementById('modalImage');
     const modalInfo = document.getElementById('modalInfo');
     
-    // Use the currently displayed images array
     const imageFilename = displayedImages[index];
     const frame = displayedFrames[index];
     
-    // Build the URL using the Flask route
     const imageUrl = `/keyframes/${imageFilename}`;
     modalImage.src = imageUrl;
     
-    // Display frame info with metadata
     const infoText = `
         Frame ${index + 1} of ${displayedImages.length}
         | Score: ${frame.final_score.toFixed(3)}
@@ -39,19 +36,17 @@ function openModal(index) {
         | Emotion: ${frame.emotion_intensity.toFixed(3)}
         | Pose: ${frame.pose_signal.toFixed(3)}
     `;
-    modalInfo.innerHTML = `
-    <div class="modal-info-text">
-        ${infoText}
-    </div>
-    <div class="modal-actions">
-        <button class="btn-enhance-modal" onclick="openThumbnailEditor('${imageFilename}')">
-            Enhance Keyframe
-        </button>
-    </div>
-`;
-    modal.style.display = 'block';
     
-    // Prevent body scroll
+    modalInfo.innerHTML = `
+        <div class="modal-info-text">${infoText}</div>
+        <div class="modal-actions">
+            <button class="btn-enhance-modal" onclick="enhanceKeyframe('${imageFilename}', event)">
+                Enhance Keyframe
+            </button>
+        </div>
+    `;
+    
+    modal.style.display = 'block';
     document.body.style.overflow = 'hidden';
 }
 
@@ -76,17 +71,53 @@ document.addEventListener('keydown', function(event) {
 });
 
 function downloadAll() {
-    alert('Download all functionality would require server-side zip creation. Implementation depends on your requirements.');
-    // TODO: Implement actual download functionality
-    // Maybe create a Flask route that zips all images and sends them
+    alert('Download all functionality would require server-side zip creation.');
 }
 
+// ============================================================================
+// Open thumbnail editor with metadata
+// ============================================================================
+async function enhanceKeyframe(filename, event) {
+    if (event) event.stopPropagation(); // Prevent modal from closing
+    
+    // Close the image modal first
+    closeModal();
+    
+    // Try to load metadata for this keyframe
+    // (You can expand this to fetch from your JSON API)
+    const metadata = await loadMetadataForKeyframe(filename);
+    
+    // Open enhanced thumbnail editor with metadata
+    openThumbnailEditor(filename, metadata);
+}
+
+async function loadMetadataForKeyframe(filename) {
+    try {
+        // Fetch metadata from your Flask API endpoint
+        const res = await fetch(`/api/video-metadata/${filename}`);
+        const data = await res.json();
+        
+        if (data.success) {
+            console.log('Loaded metadata:', data.metadata);
+            return data.metadata;
+        } else {
+            console.warn('No metadata found:', data.error);
+            return null;
+        }
+    } catch (e) {
+        console.error('Failed to load metadata:', e);
+        return null;
+    }
+}
+
+// ============================================================================
+// Gallery rendering with enhance button in cards
+// ============================================================================
 const gallery = document.getElementById("gallery");
 
 function renderGallery(data) {
     gallery.innerHTML = "";
     
-    // Update the displayed frames and images for modal navigation
     displayedFrames = data;
     displayedImages = data.map(item => item.filename);
 
@@ -102,10 +133,9 @@ function renderGallery(data) {
     data.forEach((item, index) => {
         const card = document.createElement("div");
         card.className = "keyframe-card";
-        card.onclick = () => openModal(index);
 
         card.innerHTML = `
-            <div class="image-wrapper">
+            <div class="image-wrapper" onclick="openModal(${index})">
                 <img src="/keyframes/${item.filename}" loading="lazy" alt="Frame ${index + 1}">
             </div>
             <div class="card-info">
@@ -125,21 +155,11 @@ function renderGallery(data) {
 }
 
 function applySorting() {
-    // Create a copy of the original keyframes
     let sorted = [...keyframes];
-    
-    // Get the selected sort option
     const sortBy = document.getElementById("sortBy").value;
-    
-    // Sort in descending order (highest first)
     sorted.sort((a, b) => b[sortBy] - a[sortBy]);
-    
-    // Render the sorted gallery
     renderGallery(sorted);
 }
 
-// Add event listener for sort dropdown
 document.getElementById("sortBy").addEventListener("change", applySorting);
-
-// Initial render with default sorting (final_score)
 applySorting();
