@@ -243,6 +243,7 @@ def select_keyframes(
     yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
     debug: bool = True,
     video_id: str = "unknown",
+    redundancy_reduction: bool = True,
 ):
     """
     This is the main selection stage (STEP 4 in your pipeline).
@@ -767,7 +768,7 @@ def select_keyframes(
     # =============================================================================
     # Stage 6: Redundancy reduction (deduplication)
     # =============================================================================
-    if ENABLE_REDUNDANCY_REDUCTION and all_candidates:
+    if redundancy_reduction and all_candidates:
         print("\n" + "=" * 72)
         print(f"[REDUNDANCY] >>> Applying deduplication")
         print(f"[REDUNDANCY] Before: {len(all_candidates)} candidates")
@@ -1005,7 +1006,11 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true", help="Verbose stage prints inside segments")
     parser.add_argument("--video_id", type=str, default="unknown",
                         help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
+    parser.add_argument("--redundancy_reduction", type=str, default="true",
+                        help="Enable redundancy reduction: 'true' or 'false' (default: true)")
     args = parser.parse_args()
+
+    enable_rr = args.redundancy_reduction.lower() not in ("false", "0", "no", "off")
 
     # Run the selection.
     select_keyframes(
@@ -1018,4 +1023,5 @@ if __name__ == "__main__":
         yolo_pose_path=args.yolo_pose_path,
         debug=args.debug,
         video_id=args.video_id,
+        redundancy_reduction=enable_rr,
     )

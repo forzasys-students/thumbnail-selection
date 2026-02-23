@@ -43,6 +43,39 @@
                 </label>
             </div>
 
+            <div class="form-group">
+                <label for="fps">
+                    Frame Extraction Rate
+                    <span class="setting-badge" id="fpsValue">5 fps</span>
+                </label>
+                <input type="range"
+                    name="fps"
+                    id="fps"
+                    min="1" max="24" value="5" step="1"
+                    class="range-slider"
+                    oninput="updateFps(this.value)">
+                <div class="range-labels">
+                    <span>1 fps · faster run</span>
+                    <span>24 fps · max detail</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <div class="toggle-row">
+                    <div class="toggle-info">
+                        <span class="toggle-title">Redundancy Reduction</span>
+                        <span class="toggle-desc">Removes near-duplicate keyframes automatically</span>
+                    </div>
+                    <label class="toggle-switch">
+                        <input type="checkbox"
+                            name="redundancy_reduction"
+                            id="redundancyToggle"
+                            value="1"
+                            checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+            </div>
 
             <button type="submit">Start Processing</button>
         </form>

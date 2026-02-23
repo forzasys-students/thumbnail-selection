@@ -46,7 +46,7 @@ progress_queue = queue.Queue()
 current_status = {"stage": "", "progress": 0, "message": ""}
 
 
-def run_inference(model, video_path):
+def run_inference(model, video_path, fps=5, redundancy_reduction=True):
     """Run inference pipeline and emit progress updates"""
     global current_status
     
@@ -60,14 +60,24 @@ def run_inference(model, video_path):
         # Debug output
         print(f"Running: {bash_executable} {SCRIPT_PATH} --model {model} --video {video_path}")
         print(f"Working directory: {BASE_DIR}")
-        
+        print(f"fps={fps}  redundancy_reduction={redundancy_reduction}")
+
+        cmd = [
+            bash_executable, SCRIPT_PATH,
+            "--model", model,
+            "--video", video_path,
+            "--fps",   str(fps),
+        ]
+        if not redundancy_reduction:
+            cmd.append("--no_redundancy")
+
         # Start the subprocess with UTF-8 encoding
         process = subprocess.Popen(
-            [bash_executable, SCRIPT_PATH, "--model", model, "--video", video_path],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             encoding='utf-8',
-            errors='replace',  # Replace problematic characters instead of crashing
+            errors='replace',
             bufsize=1,
             cwd=BASE_DIR,
             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
@@ -149,12 +159,19 @@ def index():
             filename = secure_filename(video_file.filename)
 
             upload_dir = os.path.join(BASE_DIR, "data")
-            os.makedirs(upload_dir, exist_ok=True) 
+            os.makedirs(upload_dir, exist_ok=True)
 
             video_path = os.path.join(upload_dir, filename)
             video_file.save(video_path)
 
-            thread = threading.Thread(target=run_inference, args=(model, video_path))
+            fps = int(request.form.get('fps', 5))
+            fps = max(1, min(24, fps))
+            redundancy_reduction = request.form.get('redundancy_reduction') == '1'
+
+            thread = threading.Thread(
+                target=run_inference,
+                args=(model, video_path, fps, redundancy_reduction)
+            )
             thread.daemon = True
             thread.start()
 
@@ -330,7 +347,8 @@ def create_thumbnail_route():
 
         keyframe_filename = data.get('keyframe_filename')
         mask_filename     = data.get('mask_filename')
-        elements = data.get('elements', [])  
+        #text_elements     = data.get('text_elements', [])
+        elements = data.get('elements', [])  # unified list of all graphic elements
 
         background_color  = data.get('background_color', '#000000')
 

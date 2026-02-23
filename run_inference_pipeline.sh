@@ -7,9 +7,11 @@ DEFAULT_MODEL="resnet18"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --video)    VIDEO_PATH="$2";  shift ;;
-        --model)    MODEL_NAME="$2";  shift ;;
-        --video_id) VIDEO_ID="$2";    shift ;;
+        --video)         VIDEO_PATH="$2";  shift ;;
+        --model)         MODEL_NAME="$2";  shift ;;
+        --video_id)      VIDEO_ID="$2";    shift ;;
+        --fps)           FPS="$2";         shift ;;
+        --no_redundancy) NO_REDUNDANCY=1         ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
@@ -17,6 +19,11 @@ done
 
 VIDEO_PATH="${VIDEO_PATH:-$DEFAULT_VIDEO_PATH}"
 MODEL_NAME="${MODEL_NAME:-$DEFAULT_MODEL}"
+FPS="${FPS:-5}"
+REDUNDANCY_ARG="true"
+if [ -n "$NO_REDUNDANCY" ]; then
+    REDUNDANCY_ARG="false"
+fi
 
 if [ -z "$VIDEO_ID" ]; then
     VIDEO_ID=$(basename "$VIDEO_PATH" | grep -oE 'video_[0-9]+' | grep -oE '[0-9]+' | head -1)
@@ -29,6 +36,8 @@ VIDEO_ID="${VIDEO_ID:-unknown}"
 echo "[INFO] Using video:    $VIDEO_PATH"
 echo "[INFO] Using model:    $MODEL_NAME"
 echo "[INFO] Using video_id: $VIDEO_ID"
+echo "[INFO] Using fps:      $FPS"
+echo "[INFO] Redundancy reduction: $REDUNDANCY_ARG"
 
 INFER_ROOT="data/inference_output"
 FRAMES_DIR="$INFER_ROOT/frames"
@@ -53,7 +62,7 @@ echo "[STEP 1] Extracting frames..."
 python src/utils/frame_extractor.py \
     --input_path "$VIDEO_PATH" \
     --output_dir "$FRAMES_DIR" \
-    --fps 5 \
+    --fps "$FPS" \
     --video_id "$VIDEO_ID" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Frame extraction failed"; exit 1; fi
@@ -83,7 +92,8 @@ python src/inference/keyframe_selector.py \
     --seg_csv "$SEG_CSV" \
     --output_csv "$KEYFRAME_CSV" \
     --output_dir "$KEYFRAME_DIR" \
-    --video_id "$VIDEO_ID" 2>&1
+    --video_id "$VIDEO_ID" \
+    --redundancy_reduction "$REDUNDANCY_ARG" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Keyframe selection failed"; exit 1; fi
 
