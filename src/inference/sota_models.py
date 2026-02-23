@@ -313,8 +313,8 @@ class SOTAModels:
         scores = {}
         
         # Arms raised - use both pixel height AND angle
-        # Arms raised means: wrists above shoulders (pixel) AND wide angle (>120 deg)
-        if lw_up > 0.55 and rw_up > 0.55:
+        # Arms raised means: wrists above shoulders (pixel) AND wide angle (degree)
+        if lw_up > 0.20 and rw_up > 0.20:
             # Check angles: arms should be raised (>100 degrees from torso)
             if l_arm_angle > 100 and r_arm_angle > 100:
                 arm_avg = (lw_up + rw_up) / 2

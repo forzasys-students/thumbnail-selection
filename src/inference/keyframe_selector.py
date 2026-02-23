@@ -79,7 +79,7 @@ SEGMENT_QUOTA_FRAC = {
 QUALITY_THRESHOLDS = {
     "P1_player_referee": {
         "min_luminance": 50.0,       # reject dark frames
-        "min_sharpness": 15.0,       # reject blurry frames (gradient magnitude)
+        "min_sharpness": 10.0,       # reject blurry frames (gradient magnitude)
         "max_uniformity": 1.0,       # reject flat/uniform frames
         "min_texture": 3.0,          # edge density check
         "min_closeup_ratio": 0.05,   # pose-based closeup proxy (tune this based on your pose model's output)
@@ -238,10 +238,11 @@ def select_keyframes(
     seg_csv: str,
     output_csv: str,
     output_dir: str,
-    top_n: int = 100,
+    top_n: int = 50,
     device: str = "cuda",
     yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
     debug: bool = True,
+    video_id: str = "unknown",
 ):
     """
     This is the main selection stage (STEP 4 in your pipeline).
@@ -898,7 +899,9 @@ def select_keyframes(
         conf = float(c.get("model_confidence", 0.0))
         score = float(c.get("final_score", 0.0))
 
-        out_path = os.path.join(output_dir, f"rank{rank+1:02d}_{pr}_conf{conf:.2f}_score{score:.3f}.jpg")
+        #out_path = os.path.join(output_dir, f"rank{rank+1:02d}_{pr}_conf{conf:.2f}_score{score:.3f}.jpg")
+        out_path = os.path.join(output_dir, f"video_{video_id}_rank{rank+1:02d}_{pr}_conf{conf:.2f}_score{score:.3f}.jpg")
+
 
         img = cv2.imread(c["path"])
         if img is not None:
@@ -906,6 +909,7 @@ def select_keyframes(
 
         results.append({
             # --- identity / ranking ---
+            "video_id": video_id,                                       # Forzasys video asset ID — used by metadata API to match event
             "rank": rank + 1,                                           # Final rank after all selection stages
             "segment_id": c["segment_id"],                              # Temporal segment ID this frame was selected from
             "segment_priority": pr,                                     # Semantic segment class (P1 player/referee, P2 corner, P3 staff, P4 behind goal)
@@ -995,10 +999,12 @@ if __name__ == "__main__":
     parser.add_argument("--seg_csv", required=True)             # segment ranges + priorities
     parser.add_argument("--output_csv", required=True)          # output CSV path
     parser.add_argument("--output_dir", required=True)          # where to save keyframe images
-    parser.add_argument("--top_n", type=int, default=100)       # total output keyframes
+    parser.add_argument("--top_n", type=int, default=50)       # total output keyframes
     parser.add_argument("--device", type=str, default="cuda")   # cuda or cpu
     parser.add_argument("--yolo_pose_path", type=str, default="models/yolo/yolo26m-pose.pt")
     parser.add_argument("--debug", action="store_true", help="Verbose stage prints inside segments")
+    parser.add_argument("--video_id", type=str, default="unknown",
+                        help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
     args = parser.parse_args()
 
     # Run the selection.
@@ -1011,4 +1017,5 @@ if __name__ == "__main__":
         device=args.device,
         yolo_pose_path=args.yolo_pose_path,
         debug=args.debug,
+        video_id=args.video_id,
     )

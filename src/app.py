@@ -7,6 +7,14 @@ import json
 import csv
 from werkzeug.utils import secure_filename
 import time
+import requests
+from datetime import datetime, timedelta
+
+# Add near the top with other config
+API = "https://api.fotbollplay.se/allsvenskan/event?from_date=2025-01-01T00:00:00.000Z&to_date=2026-01-01T00:00:00.000Z&min_rating=1&tags=%7B%22action%22%3A%22goal%22%7D&count=10&from=0"
+METADATA_CACHE = {}  # Simple in-memory cache
+CACHE_DURATION = 300  # 5 minutes
+
 
 # SAM3 client imports
 from sam3.sam3_client import (
@@ -322,7 +330,8 @@ def create_thumbnail_route():
 
         keyframe_filename = data.get('keyframe_filename')
         mask_filename     = data.get('mask_filename')
-        text_elements     = data.get('text_elements', [])
+        elements = data.get('elements', [])  
+
         background_color  = data.get('background_color', '#000000')
 
         player_layer      = data.get('player_layer', 'foreground')
@@ -353,7 +362,7 @@ def create_thumbnail_route():
         compose_thumbnail(
             image_path       = keyframe_path,
             mask_path        = mask_path,
-            text_elements    = text_elements,
+            elements         = elements, 
             background_color = background_color,
             output_path      = output_path,
             player_layer     = player_layer,
@@ -382,6 +391,202 @@ def serve_thumbnail_file(filename):
     """Serve generated thumbnail images."""
     return send_from_directory(THUMBNAILS_FOLDER, filename)
 
+
+
+@app.route('/api/fotbollplay/events')
+def get_fotbollplay_events():
+    """
+    Proxy endpoint to fetch events from FotbollPlay API with caching.
+    """
+    # Check cache first
+    cache_key = 'fotbollplay_events'
+    if cache_key in METADATA_CACHE:
+        cached_data, cached_time = METADATA_CACHE[cache_key]
+        if datetime.now() - cached_time < timedelta(seconds=CACHE_DURATION):
+            return jsonify(cached_data)
+    
+    try:
+        # Fetch from FotbollPlay API
+        response = requests.get(
+            f"{API}",
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Cache the response
+        METADATA_CACHE[cache_key] = (data, datetime.now())
+        
+        return jsonify(data)
+        
+    except requests.RequestException as e:
+        return jsonify({
+            "success": False,
+            "error": f"Failed to fetch from FotbollPlay API: {str(e)}"
+        }), 500
+
+
+
+@app.route('/api/video-metadata/<keyframe_filename>')
+def get_video_metadata(keyframe_filename):
+    """
+    Get metadata for a specific keyframe by matching video_id to a FotbollPlay event.
+
+    video_id extraction (in priority order):
+      1. From keyframe filename: video_17534_rank01_... → "17534"
+      2. From keyframes.csv saved_path column (handles mixed-slash Windows paths)
+
+    Event matching checks ALL of these fields because the FotbollPlay schema varies:
+      - event.id
+      - event.playlist.video_asset_id
+      - event.playlist.video_url  (contains /17534:start:end/)
+      - event.playlist.events[].video_asset_id
+      - event.playlist.events[].id
+    """
+    try:
+        # ── 1. Extract video_id from filename ────────────────────────────────
+        video_id = None
+
+        # Normalise mixed Windows/POSIX slashes, then grab the bare filename
+        bare = keyframe_filename.replace('\\', '/').split('/')[-1]
+
+        if 'video_' in bare:
+            try:
+                video_id = bare.split('video_')[1].split('_')[0]
+            except IndexError:
+                video_id = None
+
+        # ── 2. Fall back to keyframes.csv if filename parsing missed it ───────
+        if not video_id:
+            video_id = _lookup_video_id_from_csv(bare)
+
+        print(f"[metadata] keyframe={bare}  resolved video_id={video_id!r}")
+
+        # ── 3. Fetch events (cached) ─────────────────────────────────────────
+        events_response = get_fotbollplay_events()
+        events_data = events_response.get_json()
+
+        if not events_data:
+            return jsonify({"success": False, "error": "No events data from FotbollPlay"}), 502
+
+        #  Footbollplay may return a list at top level OR wrapped in "events" key
+        if isinstance(events_data, list):
+            events = events_data
+        else:
+            events = events_data.get('events', [])
+
+        if not events:
+            return jsonify({"success": False, "error": "Events list is empty"}), 404
+
+        # ── 4. Match event ────────────────────────────────────────────────────
+        matching_event = None
+
+        if video_id:
+            vid = str(video_id)
+            for event in events:
+                # Check top-level event id
+                if str(event.get('id', '')) == vid:
+                    matching_event = event
+                    break
+
+                playlist = event.get('playlist', {})
+
+                # Check playlist.video_asset_id
+                if str(playlist.get('video_asset_id', '')) == vid:
+                    matching_event = event
+                    break
+
+                # Check playlist.video_url for FotbollPlay m3u8 pattern /17534:start:end/
+                video_url = playlist.get('video_url', '')
+                if video_url:
+                    import re as _re
+                    m = _re.search(r'/(\d+):\d+:\d+/', video_url)
+                    if m and m.group(1) == vid:
+                        matching_event = event
+                        break
+
+                # Check nested playlist.events[]
+                for pe in playlist.get('events', []):
+                    if str(pe.get('video_asset_id', '')) == vid:
+                        matching_event = event
+                        break
+                    if str(pe.get('id', '')) == vid:
+                        matching_event = event
+                        break
+
+                if matching_event:
+                    break
+
+        # ── 5. Dev fallback ───────────────────────────────────────────────────
+        if not matching_event:
+            print(f"[WARN] No event matched video_id={video_id!r}. Returning first event as fallback.")
+            matching_event = events[0]
+
+        # ── 6. Build and return metadata ──────────────────────────────────────
+        game          = matching_event.get('playlist', {}).get('game', {})
+        home_team     = game.get('home_team',     {})
+        visiting_team = game.get('visiting_team', {})
+        tag           = matching_event.get('tag', {})
+
+        metadata = {
+            "score":          matching_event.get('score', '0-0'),
+            "game_time":      format_game_time(matching_event.get('game_time', 0)),
+            "game_phase":     matching_event.get('game_phase', ''),
+            "event_type":     tag.get('action', 'highlight'),
+            "scorer":         tag.get('player_name') or tag.get('scorer') or '',
+
+            "home_team":          home_team.get('name', ''),
+            "home_team_short":    home_team.get('short_name', ''),
+            "home_team_logo":     home_team.get('logo_url', ''),
+
+            "visiting_team":      visiting_team.get('name', ''),
+            "visiting_team_short":visiting_team.get('short_name', ''),
+            "visiting_team_logo": visiting_team.get('logo_url', ''),
+
+            "stadium":       game.get('stadium_name',    ''),
+            "tournament":    game.get('tournament_name', ''),
+            "date":          game.get('date',            ''),
+            "attendance":    game.get('attendance'),
+
+            "video_url":     matching_event.get('playlist', {}).get('video_url',      ''),
+            "thumbnail_url": matching_event.get('playlist', {}).get('thumbnail_url',  ''),
+            "description":   matching_event.get('playlist', {}).get('description',    ''),
+        }
+
+        return jsonify({"success": True, "video_id": video_id, "metadata": metadata})
+
+    except Exception as e:
+        print(f"[ERROR] get_video_metadata: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _lookup_video_id_from_csv(bare_filename: str):
+    """
+    Read video_id from keyframes.csv by matching the bare filename against
+    the saved_path column.  Handles mixed Windows/POSIX slashes.
+    """
+    csv_path = os.path.join(BASE_DIR, "data", "inference_output", "keyframes", "keyframes.csv")
+    if not os.path.exists(csv_path):
+        return None
+    try:
+        with open(csv_path, newline='', encoding='utf-8') as f:
+            for row in csv.DictReader(f):
+                saved = row.get('saved_path', '').replace('\\', '/').split('/')[-1]
+                if saved == bare_filename:
+                    return row.get('video_id') or None
+    except Exception as e:
+        print(f"[WARN] CSV lookup failed: {e}")
+    return None
+
+
+def format_game_time(seconds):
+    """Convert seconds to MM:SS format"""
+    if not seconds:
+        return "00:00"
+    mins = seconds // 60
+    secs = seconds % 60
+    return f"{mins:02d}:{secs:02d}"
 
 if __name__ == '__main__':
     app.run(debug=False, threaded=True)

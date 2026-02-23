@@ -1,64 +1,63 @@
 #!/bin/bash
 
-# Set UTF-8 encoding for Python to handle Unicode characters
 export PYTHONIOENCODING=utf-8
 
-#  DEFAULT INPUTS
-DEFAULT_GAME_NAME="SomeGameName"
-DEFAULT_CLIP_NAME="SomeName"
-DEFAULT_VIDEO_PATH="../data/goalclip.mp4"
+DEFAULT_VIDEO_PATH="../goalclip.mp4"
 DEFAULT_MODEL="resnet18"
 
-#  Parse args
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --game_name) GAME_NAME="$2"; shift ;;
-        --clip) CLIP_NAME="$2"; shift ;;
-        --video) VIDEO_PATH="$2"; shift ;;
-        --model) MODEL_NAME="$2"; shift ;;   
+        --video)    VIDEO_PATH="$2";  shift ;;
+        --model)    MODEL_NAME="$2";  shift ;;
+        --video_id) VIDEO_ID="$2";    shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
 done
 
-GAME_NAME="${GAME_NAME:-$DEFAULT_GAME_NAME}"
-CLIP_NAME="${CLIP_NAME:-$DEFAULT_CLIP_NAME}"
 VIDEO_PATH="${VIDEO_PATH:-$DEFAULT_VIDEO_PATH}"
-MODEL_NAME="${MODEL_NAME:-$DEFAULT_MODEL}"   
+MODEL_NAME="${MODEL_NAME:-$DEFAULT_MODEL}"
 
-echo "[INFO] Using game: $GAME_NAME"
-echo "[INFO] Using clip: $CLIP_NAME"
-echo "[INFO] Using video: $VIDEO_PATH"
-echo "[INFO] Using model: $MODEL_NAME"       
+if [ -z "$VIDEO_ID" ]; then
+    VIDEO_ID=$(basename "$VIDEO_PATH" | grep -oE 'video_[0-9]+' | grep -oE '[0-9]+' | head -1)
+fi
+if [ -z "$VIDEO_ID" ]; then
+    VIDEO_ID=$(echo "$VIDEO_PATH" | grep -oE '/[0-9]+:[0-9]+:[0-9]+/' | grep -oE '^/[0-9]+' | tr -d '/' | head -1)
+fi
+VIDEO_ID="${VIDEO_ID:-unknown}"
 
-#  Paths
+echo "[INFO] Using video:    $VIDEO_PATH"
+echo "[INFO] Using model:    $MODEL_NAME"
+echo "[INFO] Using video_id: $VIDEO_ID"
+
 INFER_ROOT="data/inference_output"
-FRAMES_DIR="$INFER_ROOT/frames/${GAME_NAME}/${CLIP_NAME}"
+FRAMES_DIR="$INFER_ROOT/frames"
 PRED_DIR="$INFER_ROOT/predictions"
 SEG_DIR="$INFER_ROOT/segments"
 KEYFRAME_DIR="$INFER_ROOT/keyframes"
 
-PRED_CSV="$PRED_DIR/predictions_${MODEL_NAME}.csv"    
+PRED_CSV="$PRED_DIR/predictions_${MODEL_NAME}.csv"
 SEG_CSV="$SEG_DIR/segments.csv"
 KEYFRAME_CSV="$KEYFRAME_DIR/keyframes.csv"
-
-WEIGHTS_PATH="models/${MODEL_NAME}_best.pt"       
+WEIGHTS_PATH="models/${MODEL_NAME}_best.pt"
 
 mkdir -p "$FRAMES_DIR" "$PRED_DIR" "$SEG_DIR" "$KEYFRAME_DIR"
 
-#  STEP 1 – Frames
+if [ -d "$FRAMES_DIR" ]; then
+    echo "[INFO] Clearing previous frames from $FRAMES_DIR"
+    rm -rf "$FRAMES_DIR"
+    mkdir -p "$FRAMES_DIR"
+fi
+
 echo "[STEP 1] Extracting frames..."
 python src/utils/frame_extractor.py \
     --input_path "$VIDEO_PATH" \
     --output_dir "$FRAMES_DIR" \
-    --fps 5 2>&1
+    --fps 5 \
+    --video_id "$VIDEO_ID" 2>&1
 
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Frame extraction failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "[ERROR] Frame extraction failed"; exit 1; fi
 
-#  STEP 2 – Inference
 echo "[STEP 2] Running inference ($MODEL_NAME)..."
 python src/inference/inference_model.py \
     --frames_root "$FRAMES_DIR" \
@@ -66,12 +65,8 @@ python src/inference/inference_model.py \
     --model "$MODEL_NAME" \
     --output_csv "$PRED_CSV" 2>&1
 
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Inference failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "[ERROR] Inference failed"; exit 1; fi
 
-#  STEP 3 – Extracting Priority based Segments
 echo "[STEP 3] Extracting segments..."
 python src/inference/extract_priority_segments.py \
     --pred_csv "$PRED_CSV" \
@@ -80,22 +75,16 @@ python src/inference/extract_priority_segments.py \
     --copy_dir "$SEG_DIR" \
     --output_csv "$SEG_CSV" 2>&1
 
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Segment extraction failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "[ERROR] Segment extraction failed"; exit 1; fi
 
-#  STEP 4 – Keyframe Selection
 echo "[STEP 4] Selecting keyframes..."
 python src/inference/keyframe_selector.py \
     --pred_csv "$PRED_CSV" \
     --seg_csv "$SEG_CSV" \
     --output_csv "$KEYFRAME_CSV" \
-    --output_dir "$KEYFRAME_DIR" 2>&1
+    --output_dir "$KEYFRAME_DIR" \
+    --video_id "$VIDEO_ID" 2>&1
 
-if [ $? -ne 0 ]; then
-    echo "[ERROR] Keyframe selection failed"
-    exit 1
-fi
+if [ $? -ne 0 ]; then echo "[ERROR] Keyframe selection failed"; exit 1; fi
 
 echo "[DONE] Pipeline completed successfully."
