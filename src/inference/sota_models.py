@@ -352,12 +352,12 @@ class SOTAModels:
         
         # Relaxed thresholds for partial celebrations
         if hips_visible:
-            left_raised  = lw_up > 0.45 and l_arm_angle > 80
-            right_raised = rw_up > 0.45 and r_arm_angle > 80
+            left_raised  = lw_up > 0.35 and l_arm_angle > 80
+            right_raised = rw_up > 0.35 and r_arm_angle > 80
         else:
             # fallback: only pixel height check
-            left_raised  = lw_up > 0.45
-            right_raised = rw_up > 0.45
+            left_raised  = lw_up > 0.35
+            right_raised = rw_up > 0.35
 
         
         # Only one arm should be raised (XOR logic)
@@ -373,7 +373,7 @@ class SOTAModels:
                 raised_conf = conf[10]  # right wrist
             
             # Only proceed if the raised arm has decent confidence
-            if raised_conf > 0.30:  # Relaxed threshold
+            if raised_conf > 0.20:  # Relaxed threshold
                 height_score = np.clip((raised_height - 0.40) / 0.6, 0.0, 1.0)  # Relaxed from 0.50
                 angle_score = min((raised_angle - 75) / 90, 1.0)  # Relaxed from 90
                 
@@ -462,10 +462,10 @@ class SOTAModels:
 
             # ---------- FINAL FACE QUALITY ----------
             q = (
-                0.35 * size_score +
+                0.30 * size_score +
                 0.20 * pos_score +
                 0.25 * det_score +
-                0.20 * sharp_norm
+                0.25 * sharp_norm
             )
 
             best_q = max(best_q, float(q))

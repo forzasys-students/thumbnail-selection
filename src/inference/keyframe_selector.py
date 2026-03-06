@@ -79,16 +79,16 @@ SEGMENT_QUOTA_FRAC = {
 QUALITY_THRESHOLDS = {
     "P1_player_referee": {
         "min_luminance": 50.0,       # reject dark frames
-        "min_sharpness": 10.0,       # reject blurry frames (gradient magnitude)
-        "max_uniformity": 1.0,       # reject flat/uniform frames
-        "min_texture": 3.0,          # edge density check
-        "min_closeup_ratio": 0.05,   # pose-based closeup proxy (tune this based on your pose model's output)
-        "min_iqa_norm": 0.10,        # Relaxed from 0.55 (soft gate only for P1)
+        "min_sharpness": 15.0,       # reject blurry frames (gradient magnitude)
+        "max_uniformity": 0.70,       # reject flat/uniform frames
+        "min_texture": 5.0,          # edge density check
+        "min_closeup_ratio": 0.10,   # pose-based closeup proxy (tune this based on your pose model's output)
+        "min_iqa_norm": 0.10,        
     },
     "P2_corner": {
         "min_luminance": 50.0,       
         "min_sharpness": 15.0,       
-        "max_uniformity": 1.0,       
+        "max_uniformity": 0.70,       
         "min_texture": 5.0,
         "min_closeup_ratio": 0.10,    
         "min_iqa_norm": 0.0,        
@@ -96,7 +96,7 @@ QUALITY_THRESHOLDS = {
     "P3_side_staff": {
         "min_luminance": 50.0,
         "min_sharpness": 15.0,
-        "max_uniformity": 1.0,
+        "max_uniformity": 0.70,
         "min_texture": 4.0,
         "min_closeup_ratio": 0.10,   
         "min_iqa_norm": 0.0,
@@ -104,7 +104,7 @@ QUALITY_THRESHOLDS = {
     "P4_behind_goal": {
         "min_luminance": 50.0,
         "min_sharpness": 15.0,
-        "max_uniformity": 1.0,
+        "max_uniformity": 0.70,
         "min_texture": 4.0,
         "min_closeup_ratio": 0.10,    
         "min_iqa_norm": 0.0,
@@ -139,10 +139,10 @@ def normalize_weights(weights: dict) -> dict:
 # They define how much each signal contributes to "score_pre_mult" before segment multiplier.
 WEIGHTS = normalize_weights({
     #"content": 0.60,        # face/celebration/closeup (depends on keyframe_priority)
-    "iqa": 0.40,             # Image quality assessment (TOPIQ)
+    "iqa": 0.50,             # Image quality assessment (TOPIQ)
     "face": 0.20,            # face quality signal
-    "emotion": 0.20,         # emotion signal
-    "pose": 0.20,            # pose signal
+    "emotion": 0.15,         # emotion signal
+    "pose": 0.15,            # pose signal
 })
 
 
@@ -292,7 +292,6 @@ def select_keyframes(
         "frames_filtered_logo": 0,        # dropped by logo detection
 
         "segments_empty_after_prefilter": 0,  # segments that become empty after early filtering
-        "p1_failed_iqa_gate_fallbacks": 0, # how often P1 needed TOPIQ fallback
         "candidates_by_segment_type": {
             "P1_player_referee": 0,
             "P2_corner": 0,
@@ -476,7 +475,7 @@ def select_keyframes(
 
 
         # ======================================================================
-        # STAGE 3: SCORING SIGNALS
+        # STAGE 3: SCORING SIGNALS (face quality, emotion intensity, pose) + PRIORITY-BASED RANKING
         # ======================================================================
         if debug:
             print("[SOTA] >>> Stage 3: Scoring signals (face, emotion, pose)")
@@ -514,7 +513,7 @@ def select_keyframes(
                 1: {"face": 0.35, "emotion": 0.35, "pose": 0.30},  # Complete celebration
                 2: {"face": 0.60, "emotion": 0.40},                # Expressive face
                 3: {"face": 0.50, "pose": 0.50},                   # Pose-driven
-                4: {"face": 1.0},                                  # face-only (fallback)
+                4: {"face": 1.0},                                  # face-only 
             }
             # =============================================================
 
@@ -607,7 +606,7 @@ def select_keyframes(
         # STAGE 4: Image Quality Assessment 
         # ====================================================================
         if debug:
-            print("[IQA] >>> Stage 4: BATCHED TOPIQ on segment top-k")
+            print("[IQA] >>> Stage 4: Image Quality Assessment (TOPIQ)")
 
         t_m = time.time()
         
@@ -623,26 +622,6 @@ def select_keyframes(
         if debug:
             print(f"[IQA] <<< Batched {len(iqa_scores)} in {time.time() - t_m:.2f}s")
 
-        # P1 TOPIQ soft gate:
-        # Only P1 uses a quality gate; BUT you never delete the entire segment.
-        # If all fail, you keep the best 2 anyway (fallback) so P1 doesn't go empty.
-        if seg_priority == "P1_player_referee":
-            gated = [c for c in candidates_sorted if c["iqa_norm"] >= th["min_iqa_norm"]]
-            if not gated:
-                analytics["p1_failed_iqa_gate_fallbacks"] += 1
-                if debug:
-                    print("[IQA] !!! P1 TOPIQ gate failed for all. Using fallback: keep best 2 by priority/rank/sharp.")
-                candidates_sorted = sorted(
-                    candidates_sorted,
-                    key=lambda x: (x["keyframe_priority"], -x["rank_value"], -x["sharpness"])
-                )[:2]
-                for c in candidates_sorted:
-                    c["quality_fallback"] = 1
-            else:
-                candidates_sorted = gated
-                if debug:
-                    print(f"[IQA] P1 TOPIQ gate passed: kept {len(candidates_sorted)}")
-
         # =====================================================================
         # STAGE 5: Calculate final score 
         # ====================================================================
@@ -654,27 +633,38 @@ def select_keyframes(
         scored: List[dict] = []
         for c in candidates_sorted:
 
-            # ---------- BUILD SEMANTIC SIGNALS (face / emotion / pose / closeup) ----------
+            # ============ BUILD SEMANTIC SIGNALS (face / emotion / pose) ===========
             
-            # 1. Face signal
-            face_signal = 0.0
-            if int(c.get("num_faces", 0)) > 0:
-                face_q = float(c.get("face_quality", 0.0))
-                nfaces = int(c.get("num_faces", 0))
+            # Validity conditions for each signal 
+            face_valid = (
+                c["num_faces"] > 0 and
+                c["face_det_score"] > 0.45 
+            )
 
-                # Quality is the base
-                face_signal = face_q
-                
-                # Multi-face bonus (small)
-                if nfaces > 1 and nfaces <= 5:  # cap the bonus at 5 faces to avoid over-rewarding crowded scenes
-                    multi_bonus = 0.025 * min((nfaces - 1) / 5.0, 1.0)
-                    face_signal = min(face_signal + multi_bonus, 1.0)
+            pose_valid = c["pose_score"] > 0.15
 
-            # 2. Emotion signal 
-            emo_signal = float(np.clip(c.get("emotion_intensity", 0.0), 0.0, 1.0))
-            
-            # 3. Pose detection signal
-            pose_signal = float(np.clip(c.get("pose_score", 0.0), 0.0, 1.0))
+            emotion_valid = (
+                face_valid and
+                c["emotion_intensity"] > 0.12
+            )
+
+            # Reliability weights for each signal (how much we trust it for this frame) 
+            face_rel = (
+                0.6 * c["face_det_score"] +
+                0.4 * c["face_quality"]
+            ) if face_valid else 0.15
+
+            pose_rel = np.clip(c["pose_score"], 0.0, 1.0) if pose_valid else 0.15
+
+            emotion_rel = (
+                c["emotion_intensity"] * face_rel
+            ) if emotion_valid else 0.0
+
+            # Final signals
+            face_signal = c["face_quality"] * face_rel
+            pose_signal = c["pose_score"] * pose_rel
+            emotion_signal = emotion_rel
+
 
             # ---------- PRIORITY-BASED MIX (4-tier system) ----------             
 
@@ -684,11 +674,11 @@ def select_keyframes(
 
             if kf_priority == 1:
                 content_src = f"celebration:{c.get('pose_label', 'none')}"
-                content_signal = (w["face"] * face_signal + w["emotion"] * emo_signal + w["pose"] * pose_signal)
+                content_signal = (w["face"] * face_signal + w["emotion"] * emotion_signal + w["pose"] * pose_signal)
                 
             elif kf_priority == 2:
                 content_src = f"expressive:{c.get('emotion_label', 'none')}"
-                content_signal = w["face"] * face_signal + w["emotion"] * emo_signal
+                content_signal = w["face"] * face_signal + w["emotion"] * emotion_signal
                 
             elif kf_priority == 3:
                 content_src = f"pose:{c.get('pose_label', 'none')}"
@@ -702,39 +692,41 @@ def select_keyframes(
 
 
             # ---------- NORMALIZE FEATURES ----------
-            iqa_val = float(np.clip(c.get("iqa_norm", 0.0), 0.0, 1.0))
+            iqa_signal = float(np.clip(c.get("iqa_norm", 0.0), 0.0, 1.0))
 
             # ---------- WEIGHTED CONTRIBUTIONS ----------
             #w_content = WEIGHTS["content"] * content_signal
             
-            w_face = WEIGHTS["face"] * face_signal  # Use face weight instead of content weight for face-only frames
-            w_emotion = WEIGHTS["emotion"] * emo_signal
+            w_face = WEIGHTS["face"] * face_signal  
+            w_emotion = WEIGHTS["emotion"] * emotion_signal
             w_pose = WEIGHTS["pose"] * pose_signal
-            
-            w_iqa = WEIGHTS["iqa"] * iqa_val
+            w_iqa = WEIGHTS["iqa"] * iqa_signal
             score_pre = w_iqa + w_face + w_emotion + w_pose
+
+            final_score = score_pre * c["segment_mult"]
 
             # ---------- FINAL SCORE ----------
             c["final_score"] = float(score_pre * c["segment_mult"])
 
+
             # ---------- STORE BREAKDOWN FOR CSV ----------
-            # Extra useful debug columns (optional but recommended)
             c["face_signal"] = float(face_signal)
             c["pose_signal"] = float(pose_signal)
+            c["emotion_signal"] = float(emotion_signal)
+            c["emotion_label"] = c.get("emotion_label", "none")
 
             c["content_source"] = content_src
             c["content_signal"] = content_signal
-
-            c["emotion_intensity"] = float(emo_signal)
-            c["emotion_label"] = c.get("emotion_label", "none")
-
             #c["w_content"] = w_content
+
             c["w_face"] = w_face
             c["w_emotion"] = w_emotion
             c["w_pose"] = w_pose
-
             c["w_iqa"]   = w_iqa
+            
             c["score_pre_mult"] = score_pre
+            c["final_score"] = float(final_score)
+
 
             # ---------- HARD FLOORS ----------
             # A frame is only eligible if:
@@ -928,6 +920,7 @@ def select_keyframes(
             # --- weighted contributions (these SUM to score_pre_mult) ---
             "w_content": round(c.get("w_content", 0.0), 4),             # Contribution from semantic importance (faces / celebration / closeup)
             "w_iqa": round(c.get("w_iqa", 0.0), 4),                     # Contribution from TOPIQ image quality assessment
+            "iqa_signal": round(c.get("iqa_norm", 0.0), 3),
         
             # --- normalized raw signals ---
             "model_confidence": round(conf, 3),                         # Classifier confidence for this frame
@@ -936,11 +929,14 @@ def select_keyframes(
             "num_faces": int(c.get("num_faces", 0)),                    # Number of detected faces
 
             # --- emotion ---
-            "emotion_intensity": round(c.get("emotion_intensity", 0.0), 3), # Normalized [0,1] emotion intensity
+            "w_emotion": round(c.get("w_emotion", 0.0), 4),             # Contribution of emotion signal to final score
+            "emotion_signal": round(c.get("emotion_signal", 0.0), 3), # Normalized [0,1] emotion intensity
             "emotion_label": c.get("emotion_label", "none"),  #             # Emotion label (happy, sad, angry, etc.)
 
             # --- signal breakdown (super useful to debug) ---
+            "w_face": round(c.get("w_face", 0.0), 4),                   # Contribution of face signal to final score
             "face_signal": round(c.get("face_signal", 0.0), 3),          # Normalized [0,1] face quality signal
+            "w_pose": round(c.get("w_pose", 0.0), 4),                   # Contribution of pose signal to final score
             "pose_signal": round(c.get("pose_signal", 0.0), 3),          # Normalized [0,1] pose detection signal
     
             # --- bookkeeping ---

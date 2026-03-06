@@ -33,7 +33,7 @@ function openModal(index) {
         | Score: ${frame.final_score.toFixed(3)}
         | IQA: ${frame.w_iqa.toFixed(3)}
         | Face: ${frame.face_signal.toFixed(3)}
-        | Emotion: ${frame.emotion_intensity.toFixed(3)}
+        | Emotion: ${frame.emotion_signal.toFixed(3)}
         | Pose: ${frame.pose_signal.toFixed(3)}
     `;
     
@@ -144,9 +144,9 @@ function renderGallery(data) {
                 </div>
                 <div class="card-meta">
                     IQA: ${item.w_iqa.toFixed(3)} |
-                    Face: ${item.face_signal.toFixed(3)} |
-                    Emotion: ${item.emotion_intensity.toFixed(3)} |
-                    Pose: ${item.pose_signal.toFixed(3)}
+                    Face: ${item.w_face.toFixed(3)} |
+                    Emotion: ${item.w_emotion.toFixed(3)} |
+                    Pose: ${item.w_pose.toFixed(3)}
                 </div>
             </div>
         `;

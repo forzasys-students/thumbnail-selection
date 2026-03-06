@@ -1,0 +1,64 @@
+{
+  "model": "resnet50",
+  "device": "cuda",
+  "gpu_name": "NVIDIA GeForce RTX 3070",
+  "test_images": 1000,
+  "overall_accuracy_pct": 90.9,
+  "macro_precision": 0.9187,
+  "macro_recall": 0.909,
+  "macro_f1": 0.9097,
+  "avg_inference_time_ms_per_frame": 1.6,
+  "timing_method": "CUDA events (forward pass only, GPU warmed up, CUDA-synchronized)",
+  "warmup_batches": 10,
+  "batch_size": 32,
+  "per_class": {
+    "Close-up_behind_the_goal": {
+      "precision": 0.9917,
+      "recall": 0.952,
+      "f1-score": 0.9714,
+      "support": 125
+    },
+    "Close-up_corner": {
+      "precision": 0.9915,
+      "recall": 0.928,
+      "f1-score": 0.9587,
+      "support": 125
+    },
+    "Close-up_player_or_field_referee": {
+      "precision": 0.8,
+      "recall": 0.96,
+      "f1-score": 0.8727,
+      "support": 125
+    },
+    "Close-up_side_staff": {
+      "precision": 0.9174,
+      "recall": 0.8,
+      "f1-score": 0.8547,
+      "support": 125
+    },
+    "Main_camera_center": {
+      "precision": 0.964,
+      "recall": 0.856,
+      "f1-score": 0.9068,
+      "support": 125
+    },
+    "Main_camera_left": {
+      "precision": 0.8824,
+      "recall": 0.96,
+      "f1-score": 0.9195,
+      "support": 125
+    },
+    "Main_camera_right": {
+      "precision": 0.8026,
+      "recall": 0.976,
+      "f1-score": 0.8809,
+      "support": 125
+    },
+    "Public": {
+      "precision": 1.0,
+      "recall": 0.84,
+      "f1-score": 0.913,
+      "support": 125
+    }
+  }
+}

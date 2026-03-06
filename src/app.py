@@ -230,9 +230,12 @@ def results():
                             "filename": basename,
                             "final_score": float(row.get("final_score", 0)),
                             "w_iqa": float(row.get("w_iqa", 0)),
-                            "face_signal": float(row.get("face_signal", 0)),
-                            "emotion_intensity": float(row.get("emotion_intensity", 0)),
-                            "pose_signal": float(row.get("pose_signal", 0)),
+                            "w_face": float(row.get("w_face", 0)),
+                            "w_emotion": float(row.get("w_emotion", 0)),
+                            "w_pose": float(row.get("w_pose", 0)),
+                            #"face_signal": float(row.get("face_signal", 0)),
+                            #"emotion_signal": float(row.get("emotion_signal", 0)),
+                            #"pose_signal": float(row.get("pose_signal", 0)),
                         })
 
         keyframes = sorted(keyframes)
