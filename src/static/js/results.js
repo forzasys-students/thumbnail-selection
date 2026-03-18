@@ -32,9 +32,9 @@ function openModal(index) {
         Frame ${index + 1} of ${displayedImages.length}
         | Score: ${frame.final_score.toFixed(3)}
         | IQA: ${frame.w_iqa.toFixed(3)}
-        | Face: ${frame.face_signal.toFixed(3)}
-        | Emotion: ${frame.emotion_signal.toFixed(3)}
-        | Pose: ${frame.pose_signal.toFixed(3)}
+        | Face: ${frame.w_face.toFixed(3)}
+        | Emotion: ${frame.w_emotion.toFixed(3)}
+        | Pose: ${frame.w_pose.toFixed(3)}
     `;
     
     modalInfo.innerHTML = `
