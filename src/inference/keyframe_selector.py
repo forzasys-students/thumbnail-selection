@@ -6,7 +6,7 @@ What this file does (high level):
 1) Load frame-level predictions (pred_csv) + segment ranges (seg_csv)
 2) For each segment:
    A) HECATE-style preprocessing filters (luminance/sharpness/uniformity + extensions) to remove bad frames
-   B) Logo detection filter to remove branded frames
+   B) Redundancy reduction to remove near-duplicates + Logo detection filter to remove branded frames 
    C) Scoring signals (face/emotion/pose - detection)
    D) Image quality assessment (TOPIQ) on segment candidates
    E) Compute final score and keep only strong candidates
@@ -25,7 +25,7 @@ Close up shot types:
 from __future__ import annotations
 from sota_models import SOTAModels
 from logo_detector import LogoDetector
-from redundancy_reduction import reduce_redundancy  
+from redundancy_reduction import reduce_redundancy, CLUSTER_DEBUG_DATA
 
 import os, sys
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -45,14 +45,7 @@ from tqdm import tqdm
 # -----------------------
 from preprocess import (
     extract_frame_index,        # parse frame index from "frame_00123.jpg"
-    # HECATE filters
-    compute_luminance,          # detect dark frames (Eq. 1 in paper)
-    compute_sharpness,          # detect blurry frames via gradient magnitude (Eq. 2)
-    compute_uniformity,         # detect flat/uniform frames via histogram (Eq. 3)
-    # Extensions for soccer keyframe selection
-    transition_overlay_score,   # proxy: rejects "too flat/overlay-ish" frames via stddev
-    texture_proxy,              # edge density proxy, rejects uniform/flat frames
-    detect_and_mask_cuts,       # detects transitions frames / shot cuts using mean abs diff on downscaled gray
+    compute_frame_metrics,      # HECATE filters, plus overlay and texture proxies
 )
 
 # =============================================================================
@@ -82,15 +75,15 @@ QUALITY_THRESHOLDS = {
         "min_sharpness": 15.0,       # reject blurry frames (gradient magnitude)
         "max_uniformity": 0.70,       # reject flat/uniform frames
         "min_texture": 5.0,          # edge density check
-        "min_closeup_ratio": 0.10,   # pose-based closeup proxy (tune this based on your pose model's output)
-        "min_iqa_norm": 0.10,        
+        "min_closeup_ratio": 0.05,   # pose-based closeup proxy (tune this based on your pose model's output)
+        "min_iqa_norm": 0.05,        
     },
     "P2_corner": {
         "min_luminance": 50.0,       
         "min_sharpness": 15.0,       
         "max_uniformity": 0.70,       
         "min_texture": 5.0,
-        "min_closeup_ratio": 0.10,    
+        "min_closeup_ratio": 0.05,    
         "min_iqa_norm": 0.0,        
     },
     "P3_side_staff": {
@@ -98,7 +91,7 @@ QUALITY_THRESHOLDS = {
         "min_sharpness": 15.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
-        "min_closeup_ratio": 0.10,   
+        "min_closeup_ratio": 0.05,   
         "min_iqa_norm": 0.0,
     },
     "P4_behind_goal": {
@@ -106,7 +99,7 @@ QUALITY_THRESHOLDS = {
         "min_sharpness": 15.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
-        "min_closeup_ratio": 0.10,    
+        "min_closeup_ratio": 0.05,    
         "min_iqa_norm": 0.0,
     },
 }
@@ -128,23 +121,34 @@ LOGO_CKPT_PATH = "models/logo/logo_sef_2024_resnet50.pth"
 LOGO_THRESHOLD = 0.50   # logo presence threshold
 LOGO_BATCH_SIZE = 32    # logo detection batch size
 
-# Cut detection parameters:
-CUT_DIFF_THRESHOLD = 80.0   # - CUT_DIFF_THRESHOLD: how large the mean abs diff spike must be to count as a cut
-CUT_DROP_RADIUS = 0         # - CUT_DROP_RADIUS: drop +/- N extracted frames around the cut boundary
-
 def normalize_weights(weights: dict) -> dict:
     total = sum(weights.values())
     return {k: v/total for k, v in weights.items()}
 
-# They define how much each signal contributes to "score_pre_mult" before segment multiplier.
+# weights as scaling factors to balance the contribution of each signal to the final score (before segment multiplier).
 WEIGHTS = normalize_weights({
     #"content": 0.60,        # face/celebration/closeup (depends on keyframe_priority)
-    "iqa": 0.50,             # Image quality assessment (TOPIQ)
-    "face": 0.20,            # face quality signal
-    "emotion": 0.15,         # emotion signal
-    "pose": 0.15,            # pose signal
+    "iqa": 0.35,             # Image quality assessment (TOPIQ)
+    "face": 0.25,            # face quality signal
+    "emotion": 0.20,         # emotion signal
+    "pose": 0.20,            # pose signal
 })
 
+# Compute a single proxy score from the raw metrics to use for early redundancy reduction (before heavy models).
+def compute_proxy_from_metrics(luminance, sharpness, texture):
+
+    # Normalize signals
+    sharp_norm = min(sharpness, 200.0) / 200.0
+    lum_norm = np.clip((luminance - 40.0) / 140.0, 0.0, 1.0)
+    tex_norm = np.clip(texture / 50.0, 0.0, 1.0)
+
+    proxy = (
+        0.6 * sharp_norm +
+        0.2 * lum_norm +
+        0.2 * tex_norm 
+    )
+
+    return float(np.clip(proxy, 0.0, 1.0))
 
 
 # =============================================================================
@@ -244,6 +248,7 @@ def select_keyframes(
     debug: bool = True,
     video_id: str = "unknown",
     redundancy_reduction: bool = True,
+    fps: float = 24.0,
 ):
     """
     This is the main selection stage (STEP 4 in your pipeline).
@@ -257,6 +262,8 @@ def select_keyframes(
     - output_csv: CSV with keyframes + full score breakdown per selected frame
 
     """
+
+    t_pipeline_start = time.time()   
 
     # ---- Load heavy models ONCE (expensive startup) ----
     print("Initializing heavy models")
@@ -284,11 +291,11 @@ def select_keyframes(
         "frames_filtered_sharpness": 0,
         "frames_filtered_uniformity": 0,
 
-        "frames_dropped_cutmask": 0,      # dropped around detected cuts
         "frames_filtered_overlay": 0,     # dropped by overlay proxy threshold
         "frames_filtered_texture": 0,     # dropped by texture (uniformity) threshold
 
         "frames_filtered_closeup": 0,     # dropped by pose-derived closeup threshold
+        "frames_dropped_redundancy": 0,   # dropped by hybrid redundancy reduction (CLIP + temporal)
         "frames_filtered_logo": 0,        # dropped by logo detection
 
         "segments_empty_after_prefilter": 0,  # segments that become empty after early filtering
@@ -300,12 +307,13 @@ def select_keyframes(
         },
         "timing": {
             "preprocess_sec": 0.0,          # cheap stage
+            "redundancy_sec": 0.0,
+            "logo_sec": 0.0,
             "face_sec": 0.0,                # face quality + detection
             "emotion_sec": 0.0,             # emotion intensity
             "pose_sec": 0.0,                # pose detection
             "iqa_sec": 0.0,                 # TOPIQ only 
             "sota_heavy_sec": 0.0,          # total heavy stage time
-            "scoring_sec": 0.0,             # final scoring + hard floors
         }
     }
 
@@ -349,69 +357,55 @@ def select_keyframes(
         # STAGE 1: PREPROCESSING
         # ======================================================================
         if debug:
-            print("[PREPROCESS] >>> Stage 1: cut-mask + cheap filters (overlay/blur/texture/conf)")
+            print("[PREPROCESS] >>> Stage 1: cheap filters (overlay/blur/texture/conf)")
 
         t_pre = time.time()
-
-        # Sort paths by time so cut detection makes sense (diff between consecutive frames).
-        seg_paths = sorted(segment_frames["frame_path"].tolist(), key=extract_frame_index)
-
-        # Detect cut boundaries and mark +/- radius frames to drop.
-        cut_drop = detect_and_mask_cuts(
-            seg_paths,
-            diff_thresh=CUT_DIFF_THRESHOLD,
-            drop_radius=CUT_DROP_RADIUS
-        )
 
         pre_items: List[dict] = []
         for _, row in segment_frames.iterrows():
             path = row["frame_path"]
 
-            # 1) Drop frames near cuts (these are often blurred/transition frames).
-            if path in cut_drop:
-                analytics["frames_dropped_cutmask"] += 1
-                continue
-
-            # 2) Classifier confidence gate:
+            # Classifier confidence gate:
             # If the shot-type classifier isn't confident, don't waste compute on it.
             model_conf = float(row.get("confidence", 0.5))
             if model_conf < MIN_FINAL_CONF:
                 analytics["frames_filtered_conf"] += 1
                 continue
 
-            # From here onward, we consider it "processed".
             analytics["frames_processed"] += 1
 
-             # 3) Luminance filter (Equation 1) - reject dark frames
-            luminance = compute_luminance(path)
+            metrics = compute_frame_metrics(path)
+            if metrics is None:
+                continue  # unreadable image — skip silently
+ 
+            luminance  = metrics["luminance"]
+            sharpness  = metrics["sharpness"]
+            uniformity = metrics["uniformity"]
+            overlay    = metrics["overlay"]
+            tex        = metrics["texture"]
+ 
             if luminance < th["min_luminance"]:
                 analytics["frames_filtered_luminance"] += 1
                 continue
-
-            # 4) Sharpness filter (Equation 2) - reject blurry frames
-            sharpness = compute_sharpness(path)
+ 
             if sharpness < th["min_sharpness"]:
                 analytics["frames_filtered_sharpness"] += 1
                 continue
-
-            # 5) Uniformity filter (Equation 3) - reject flat/uniform frames
-            uniformity = compute_uniformity(path)
+ 
             if uniformity > th["max_uniformity"]:
                 analytics["frames_filtered_uniformity"] += 1
                 continue
-
-            # 6) Overlay / transition proxy:
-            # Uses gray stddev heuristic to reject flat/overlay frames.
-            overlay = transition_overlay_score(path)
+ 
             if overlay < 18:
                 analytics["frames_filtered_overlay"] += 1
                 continue
-
-            # 7) Uniformity test: texture proxy (edge density).
-            tex = texture_proxy(path)
+ 
             if tex < float(th.get("min_texture", 0.0)):
                 analytics["frames_filtered_texture"] += 1
                 continue
+
+
+            proxy_score = compute_proxy_from_metrics(luminance,sharpness,tex)
 
             # If it passes all cheap filters, keep it for the next stage.
             pre_items.append({
@@ -424,13 +418,13 @@ def select_keyframes(
                 "sharpness": float(sharpness),
                 "uniformity": float(uniformity),
                 "texture": float(tex),
+                "proxy_score": float(proxy_score),
             })
 
         analytics["timing"]["preprocess_sec"] += (time.time() - t_pre)
 
         if debug:
-            print(f"[PREPROCESS] <<< Stage 1 done: kept={len(pre_items)} / processed={len(segment_frames)} "
-                  f"(cut_drop={len(cut_drop)})")
+            print(f"[PREPROCESS] <<< Stage 1 done: kept={len(pre_items)} / processed={len(segment_frames)} ")
 
         # If nothing survives cheap filters, segment contributes nothing.
         if not pre_items:
@@ -440,9 +434,50 @@ def select_keyframes(
             continue
 
 
+        # ==============================
+        # STAGE 2A: REDUNDANCY REDUCTION
+        # ==============================
+        # Hybrid: CLIP first (semantic near-duplicates), then temporal safety
+        # net for edge cases CLIP lets through — frames that look just different
+        # enough to survive the similarity threshold but whose frame indices are
+        # too close to be distinct moments.
+        # temporal_window is derived from fps so the window always represents
+        # 0.5s of real video time regardless of extraction rate.
+        #   5fps  -> window=3   (0.5s * 5  = 2.5, rounds to 3)
+        #   12fps -> window=6   (0.5s * 12 = 6)
+        #   24fps -> window=12  (0.5s * 24 = 12)
+        t_rr = time.time()
+        if redundancy_reduction and pre_items:
+            before_rr = len(pre_items)
+            temporal_window = max(1, round(0.5 * fps))
+            if debug:
+                print(f"[REDUNDANCY-EARLY] Before: {before_rr} | temporal_window={temporal_window} (0.5s @ {fps}fps)")
+ 
+            pre_items = reduce_redundancy(
+                pre_items,
+                method="hybrid",
+                visual_threshold=0.90,   # CLIP similarity 
+                visual_method="clip",    # semantic embeddings
+                temporal_window=temporal_window,
+                score_key="proxy_score",
+                top_k=1,
+                clip_device=device,
+                clip_batch_size=64,
+                debug=debug,
+            )
+
+            analytics["timing"]["redundancy_sec"] += (time.time() - t_rr)
+
+            if debug:
+                print(f"[REDUNDANCY-EARLY] After: {len(pre_items)} "
+                      f"(dropped {before_rr - len(pre_items)})")
+            analytics["frames_dropped_redundancy"] += before_rr - len(pre_items)
+
+
         # ======================================================================
-        # STAGE 2 : LOGO DETECTION FILTER
+        # STAGE 2B : LOGO DETECTION FILTER
         # ======================================================================
+        t_logo = time.time()
         before_logo = len(pre_items)
         paths = [it["path"] for it in pre_items]
 
@@ -466,6 +501,8 @@ def select_keyframes(
 
         pre_items = kept
         after_logo = len(pre_items)
+        
+        analytics["timing"]["logo_sec"] += (time.time() - t_logo)
 
         if debug:
             print(f"[LOGO] <<< Stage 2C logo: {before_logo} -> {after_logo} (thr={LOGO_THRESHOLD})")
@@ -491,9 +528,9 @@ def select_keyframes(
                 analytics["frames_filtered_closeup"] += 1
                 continue
 
-            # Face quality
+            # Face quality (includes occlusion/visibility score)
             t0 = time.time()
-            num_faces, face_area, face_q, face_det, detected_faces, img = models.face_quality(path)
+            num_faces, face_area, face_q, face_det, face_visibility, detected_faces, img = models.face_quality(path)
             analytics["timing"]["face_sec"] += (time.time() - t0)
             
             # Emotion detecton
@@ -568,6 +605,7 @@ def select_keyframes(
                 "face_area": float(face_area),
                 "face_quality": float(face_q),
                 "face_det_score": float(face_det),
+                "face_visibility": float(face_visibility),  
                             
                 "emotion_intensity": float(emo_intensity),
                 "emotion_label": str(emo_label),
@@ -638,32 +676,21 @@ def select_keyframes(
             # Validity conditions for each signal 
             face_valid = (
                 c["num_faces"] > 0 and
-                c["face_det_score"] > 0.45 
+                c["face_det_score"] > 0.60 # can tune this (face detection confidence threshold)
             )
 
-            pose_valid = c["pose_score"] > 0.15
+            pose_valid = c["pose_score"] > 0.01
 
             emotion_valid = (
                 face_valid and
-                c["emotion_intensity"] > 0.12
+                c["emotion_intensity"] > 0.01
             )
 
-            # Reliability weights for each signal (how much we trust it for this frame) 
-            face_rel = (
-                0.6 * c["face_det_score"] +
-                0.4 * c["face_quality"]
-            ) if face_valid else 0.15
-
-            pose_rel = np.clip(c["pose_score"], 0.0, 1.0) if pose_valid else 0.15
-
-            emotion_rel = (
-                c["emotion_intensity"] * face_rel
-            ) if emotion_valid else 0.0
-
-            # Final signals
-            face_signal = c["face_quality"] * face_rel
-            pose_signal = c["pose_score"] * pose_rel
-            emotion_signal = emotion_rel
+            # Signals: validity gates determine whether a signal contributes.
+            # If valid, use the signal directly.
+            face_signal    = c["face_quality"]       if face_valid    else 0.0
+            pose_signal    = c["pose_score"]         if pose_valid    else 0.0
+            emotion_signal = c["emotion_intensity"]  if emotion_valid else 0.0
 
 
             # ---------- PRIORITY-BASED MIX (4-tier system) ----------             
@@ -715,6 +742,8 @@ def select_keyframes(
             c["emotion_signal"] = float(emotion_signal)
             c["emotion_label"] = c.get("emotion_label", "none")
 
+            c["face_visibility"] = float(c.get("face_visibility", 0.0)) 
+
             c["content_source"] = content_src
             c["content_signal"] = content_signal
             #c["w_content"] = w_content
@@ -739,8 +768,6 @@ def select_keyframes(
 
             scored.append(c)
 
-        analytics["timing"]["scoring_sec"] += (time.time() - t_sc)
-
         if debug:
             print(f"[SCORING] <<< Stage 5 done: kept={len(scored)} after hard floors "
                   f"(MIN_CONF={MIN_FINAL_CONF}, MIN_SCORE={MIN_FINAL_SCORE})")
@@ -757,33 +784,9 @@ def select_keyframes(
         all_candidates.extend(scored)
 
     
-    # =============================================================================
-    # Stage 6: Redundancy reduction (deduplication)
-    # =============================================================================
-    if redundancy_reduction and all_candidates:
-        print("\n" + "=" * 72)
-        print(f"[REDUNDANCY] >>> Applying deduplication")
-        print(f"[REDUNDANCY] Before: {len(all_candidates)} candidates")
-        
-        t_redund = time.time()
-        all_candidates = reduce_redundancy(
-            all_candidates,
-            method="hybrid",            #  "temporal", "visual", or "hybrid" (recommended)
-            temporal_window=48,         #  Frame distance for temporal clustering (~2 sec at 30fps)
-            visual_threshold=0.85,      #  Similarity threshold (lower = more aggressive deduplication)
-            visual_method="histogram",  #  "histogram" (color) or "phash" (structure)
-            debug=debug
-        )
-        analytics["timing"]["redundancy_sec"] = time.time() - t_redund
-        
-        print(f"[REDUNDANCY] After: {len(all_candidates)} candidates")
-        print(f"[REDUNDANCY] Removed: {len([c for c in scored if c not in all_candidates])} duplicates")
-        print(f"[REDUNDANCY] Time: {analytics['timing']['redundancy_sec']:.2f}s")
-        print("=" * 72)
-
 
     # =============================================================================
-    # Stage 7: Save selected keyframes 
+    # Stage 6: Save selected keyframes 
     # =============================================================================
 
     if not all_candidates:
@@ -936,6 +939,7 @@ def select_keyframes(
             # --- signal breakdown (super useful to debug) ---
             "w_face": round(c.get("w_face", 0.0), 4),                   # Contribution of face signal to final score
             "face_signal": round(c.get("face_signal", 0.0), 3),          # Normalized [0,1] face quality signal
+            "face_visibility": round(c.get("face_visibility", 0.5), 3),  # Landmark-geometry occlusion score [0..1]; 1=unobstructed
             "w_pose": round(c.get("w_pose", 0.0), 4),                   # Contribution of pose signal to final score
             "pose_signal": round(c.get("pose_signal", 0.0), 3),          # Normalized [0,1] pose detection signal
     
@@ -949,6 +953,11 @@ def select_keyframes(
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_csv, index=False)
 
+    if CLUSTER_DEBUG_DATA:
+        df_clusters = pd.DataFrame(CLUSTER_DEBUG_DATA)
+        df_clusters.to_csv("cluster_debug.csv", index=False)
+        print(f"[DEBUG] Saved cluster_debug.csv with {len(df_clusters)} rows")
+
     # -----------------------------------------------------------------------------
     # Print analytics summary
     # -----------------------------------------------------------------------------
@@ -956,7 +965,6 @@ def select_keyframes(
     print("ANALYTICS")
     print(f"{'='*60}")
     print(f"Frames processed (after conf gate): {analytics['frames_processed']}")
-    print(f"Dropped by cut-mask:              {analytics['frames_dropped_cutmask']}")
     print(f"Filtered by conf (<{MIN_FINAL_CONF}):        {analytics['frames_filtered_conf']}")
     print(f"\nHECATE filters:")
     print(f"  Luminance (dark frames):         {analytics['frames_filtered_luminance']}")
@@ -967,21 +975,25 @@ def select_keyframes(
     print(f"  Texture:                         {analytics['frames_filtered_texture']}")
     print(f"\nStage filters:")
     print(f"  Closeup ratio (pose):            {analytics['frames_filtered_closeup']}")
+    print(f"  Redundancy reduction (visual + temporal): {analytics['frames_dropped_redundancy']}")
     print(f"  Logo detection:                  {analytics['frames_filtered_logo']}")
-
 
     print("\nCandidates by closeup type:")
     for k, v in analytics["candidates_by_segment_type"].items():
         print(f"  {k}: {v}")
 
-    print("\nHeavy models timing breakdown:")
+    total_pipeline_sec = time.time() - t_pipeline_start
+
+    print("\nTiming breakdown (cumulative across all segments):")
+    print(f"  Preprocessing:     {analytics['timing']['preprocess_sec']:.2f}s")
+    print(f"  Redundancy (CLIP): {analytics['timing']['redundancy_sec']:.2f}s")
+    print(f"  Logo detection:    {analytics['timing']['logo_sec']:.2f}s")
     print(f"  Face detection:    {analytics['timing']['face_sec']:.2f}s")
     print(f"  Emotion detection: {analytics['timing']['emotion_sec']:.2f}s")
     print(f"  Pose detection:    {analytics['timing']['pose_sec']:.2f}s")
     print(f"  IQA (TOPIQ):       {analytics['timing']['iqa_sec']:.2f}s")
-    print(f"  Total heavy models:{analytics['timing']['face_sec'] + analytics['timing']['emotion_sec'] + analytics['timing']['pose_sec'] + analytics['timing']['iqa_sec']:.2f}s")
-    print(f"\nSaved {len(results_df)} keyframes -> {output_csv}")
-    print(f"{'='*60}\n")
+    print(f"  Heavy models total:{analytics['timing']['face_sec'] + analytics['timing']['emotion_sec'] + analytics['timing']['pose_sec'] + analytics['timing']['iqa_sec']:.2f}s")
+    print(f"  Total pipeline:    {total_pipeline_sec:.2f}s")
 
 
 # =============================================================================
@@ -1004,6 +1016,9 @@ if __name__ == "__main__":
                         help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
     parser.add_argument("--redundancy_reduction", type=str, default="true",
                         help="Enable redundancy reduction: 'true' or 'false' (default: true)")
+    parser.add_argument("--fps", type=float, default=24.0,
+                        help="Extraction FPS — used to derive temporal_window (0.5s window). "
+                             "Must match the FPS passed to frame_extractor.py (default: 24.0)")
     args = parser.parse_args()
 
     enable_rr = args.redundancy_reduction.lower() not in ("false", "0", "no", "off")
@@ -1020,4 +1035,5 @@ if __name__ == "__main__":
         debug=args.debug,
         video_id=args.video_id,
         redundancy_reduction=enable_rr,
+        fps=args.fps,
     )
