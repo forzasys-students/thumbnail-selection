@@ -23,7 +23,7 @@ class SOTAModels:
         self,
         device: str = "cuda",
         yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
-        insightface_name: str = "buffalo_l",
+        insightface_name: str = "buffalo_s",
         debug: bool = False,
     ):
         self.debug = bool(debug)
@@ -46,7 +46,8 @@ class SOTAModels:
 
         self.face_app = FaceAnalysis(name=insightface_name, providers=providers)
         ctx_id = 0 if self.device.startswith("cuda") else -1
-        self.face_app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+        # The detector will resize input images to this size for detection; larger sizes may improve small face detection but increase latency. 640 is a good balance for broadcast footage where faces are often small but we want to keep inference fast. 
+        self.face_app.prepare(ctx_id=ctx_id, det_size=(256, 256)) # reduce to (256,256) for faster but less accurate detection. 
 
         if self.debug:
             print("[SOTA] Loading TOPIQ (pyiqa)")
@@ -400,89 +401,385 @@ class SOTAModels:
     # -----------------------
     # Face detection and quality
     # -----------------------
-    def face_quality(self, path: str) -> Tuple[int, float, float, float, List, Optional[np.ndarray]]:
+
+    def face_occlusion_score(self, face, img_w: int, img_h: int) -> float:
         """
-        Single-frame face quality assessment.
-        Returns: num_faces, largest_face_area, face_quality, best_det_score, detected_faces, img
+        Estimate how unoccluded / fully-visible a face is using InsightFace's
+        5-point facial landmarks.
+
+        Keypoint layout (buffalo_l):
+            [0] left_eye  [1] right_eye  [2] nose
+            [3] left_mouth_corner  [4] right_mouth_corner
+
+        The score captures four independent cues:
+
+        1. **Landmark completeness** – what fraction of the 5 kps fall inside
+           the predicted bounding box.  A teammate covering part of the face
+           will push one or more kps outside or to the edge of the bbox.
+
+        2. **Eye separation** – the horizontal distance between the two eyes,
+           normalised by face width.  An occluded or turned face shows eyes
+           closer together or one eye missing from its expected position.
+
+        3. **Vertical landmark ordering** – eyes should sit above the nose,
+           which should sit above the mouth.  Occlusion often breaks this
+           geometric order (e.g. a jersey sleeve across the lower face pushes
+           mouth kps upward).
+
+        4. **Landmark spread** – standard deviation of all 5 kps normalised
+           into the bbox coordinate system.  A clear face has landmarks spread
+           across both axes (~0.25–0.35 std).  Heavy occlusion collapses them
+           toward one region.
+
+        Returns
+        -------
+        float in [0, 1]  –  1.0 = fully visible,  0.0 = heavily occluded.
+        0.5 is returned when landmarks are unavailable (neutral fallback).
+        """
+        kps = getattr(face, "kps", None)
+        if kps is None or len(kps) < 5:
+            return 0.5  # no landmark data – neutral
+
+        kps = np.array(kps, dtype=float)  # shape (5, 2)
+
+        x1, y1, x2, y2 = map(float, face.bbox.tolist())
+        # Clamp to image bounds before computing ratios
+        x1 = max(0.0, x1);  y1 = max(0.0, y1)
+        x2 = min(float(img_w), x2);  y2 = min(float(img_h), y2)
+        face_w = max(x2 - x1, 1.0)
+        face_h = max(y2 - y1, 1.0)
+
+        # ── 1. Landmark completeness (all kps inside bbox) ─────────────────
+        in_bbox = sum(
+            1 for kp in kps
+            if x1 <= kp[0] <= x2 and y1 <= kp[1] <= y2
+        )
+        completeness = in_bbox / 5.0  # [0..1]
+
+        # ── 2. Eye separation score ─────────────────────────────────────────
+        left_eye, right_eye = kps[0], kps[1]
+        eye_dist = float(np.linalg.norm(right_eye - left_eye))
+        eye_sep_ratio = eye_dist / face_w
+        # Expected ~0.30–0.55 for a clear, roughly-frontal face.
+        # Too small → one eye is hidden / face is heavily turned or covered.
+        if eye_sep_ratio < 0.15:
+            eye_score = eye_sep_ratio / 0.15           # linear ramp up
+        elif eye_sep_ratio <= 0.60:
+            eye_score = 1.0                             # sweet spot
+        else:
+            eye_score = max(0.0, 1.0 - (eye_sep_ratio - 0.60) / 0.40)
+
+        # ── 3. Vertical landmark ordering (eyes → nose → mouth) ────────────
+        nose = kps[2]
+        left_mouth, right_mouth = kps[3], kps[4]
+        eye_mid_y    = (left_eye[1]   + right_eye[1])   / 2.0
+        mouth_mid_y  = (left_mouth[1] + right_mouth[1]) / 2.0
+
+        # nose must lie between eyes and mouth on the y-axis
+        if eye_mid_y < nose[1] < mouth_mid_y:
+            order_score = 1.0
+        elif (nose[1] > eye_mid_y) or (nose[1] < mouth_mid_y):
+            # one condition met – partial disorder (e.g. extreme head tilt)
+            order_score = 0.5
+        else:
+            order_score = 0.0   # completely inverted
+
+        # ── 4. Landmark spread (collapse = occlusion) ──────────────────────
+        # Normalise kps to [0,1] in bbox space, then measure spread.
+        kps_norm = np.stack([
+            (kps[:, 0] - x1) / face_w,
+            (kps[:, 1] - y1) / face_h,
+        ], axis=1)  # shape (5, 2)
+        spread = float(np.std(kps_norm, axis=0).mean())
+        # A fully visible frontal face gives spread ≈ 0.25–0.35.
+        # Cluster near 0 → occluded; perfect spread → 0.30 target.
+        spread_score = float(np.clip(spread / 0.25, 0.0, 1.0))
+
+        # ── Weighted combination ────────────────────────────────────────────
+        visibility = (
+            0.35 * completeness  +  # most direct occlusion signal
+            0.30 * eye_score     +  # eyes are the most diagnostic feature
+            0.20 * order_score   +  # geometric sanity check
+            0.15 * spread_score     # overall landmark distribution
+        )
+
+        return float(np.clip(visibility, 0.0, 1.0))
+
+
+    def _select_dominant_faces(
+        self,
+        faces: List,
+        img_width: int,
+        img_height: int,
+        min_coverage: float = 0.01,
+        secondary_ratio: float = 0.35,
+    ) -> List[int]:
+        """
+        Return indices of all dominant faces in the frame.
+
+        Selection rules
+        ---------------
+        1. Compute a selection score for every face:
+               score = 0.60 * area_score + 0.40 * center_score
+           (mirrors _select_dominant_person for pose consistency)
+        2. Discard any face whose pixel area is below `min_coverage`
+           of the image area — these are background players too small
+           to contribute meaningful quality signal.
+        3. After picking the highest-scoring face as the primary, keep
+           every other face whose area is at least `secondary_ratio`
+           (default 35%) of the primary face's area.  This naturally
+           includes all prominent celebration faces while still
+           excluding distant background players.
+
+        Parameters
+        ----------
+        min_coverage    : absolute area floor (fraction of image area).
+                          Faces below this are always ignored.
+        secondary_ratio : secondary faces must be at least this fraction
+                          of the primary face's area to be included.
+                          0.35 keeps faces down to ~1/3 the primary size.
+
+        Returns a list of indices into `faces` (never empty if faces is
+        non-empty, because the primary is always included as a fallback).
+        """
+        img_area = float(img_width * img_height)
+        cx, cy = img_width / 2.0, img_height / 2.0
+
+        scored: List[Tuple[float, float, int]] = []  # (score, area_px, idx)
+
+        for i, f in enumerate(faces):
+            x1, y1, x2, y2 = map(float, f.bbox.tolist())
+            x1 = max(0.0, x1); y1 = max(0.0, y1)
+            x2 = min(float(img_width - 1), x2)
+            y2 = min(float(img_height - 1), y2)
+
+            area_px = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+            coverage = area_px / img_area
+
+            if coverage < min_coverage:
+                continue
+
+            area_score = min(coverage / 0.25, 1.0)
+
+            fx = (x1 + x2) / 2.0
+            fy = (y1 + y2) / 2.0
+            dist_x = abs(fx - cx) / max(cx, 1.0)
+            dist_y = abs(fy - cy) / max(cy, 1.0)
+            center_score = max(0.0, 1.0 - np.sqrt(dist_x ** 2 + dist_y ** 2))
+
+            sel_score = 0.60 * area_score + 0.40 * center_score
+            scored.append((sel_score, area_px, i))
+
+        if not scored:
+            # All faces too small — fall back to the largest detected face
+            fallback = max(
+                range(len(faces)),
+                key=lambda i: (
+                    max(0.0, faces[i].bbox[2] - faces[i].bbox[0]) *
+                    max(0.0, faces[i].bbox[3] - faces[i].bbox[1])
+                ),
+            )
+            return [fallback]
+
+        # Sort by selection score descending; primary is the first entry
+        scored.sort(key=lambda t: t[0], reverse=True)
+        primary_area_px = scored[0][1]
+        area_floor = primary_area_px * secondary_ratio
+
+        dominant: List[int] = []
+        for sel_score, area_px, idx in scored:
+            if area_px >= area_floor:
+                dominant.append(idx)
+
+        return dominant
+
+    def _face_metrics(
+        self,
+        f,
+        img: np.ndarray,
+        img_area: float,
+        cx: float,
+        cy: float,
+        w: int,
+        h: int,
+    ) -> Tuple[float, float, float, float, float]:
+        """
+        Compute per-face quality metrics for a single InsightFace face object.
+
+        Returns
+        -------
+        area_coverage : float  – face area / image area
+        quality       : float  – composite quality score [0..1]
+        det_score     : float  – detection confidence [0..1]
+        visibility    : float  – occlusion score [0..1]  (included in quality)
+        area_px       : float  – raw pixel area (used as aggregation weight)
+
+        Quality composite weights sum to 1.0:
+            size(0.25) + pos(0.15) + det(0.20) + sharp(0.20) + visibility(0.20)
+
+        Visibility is included here and nowhere else — Stage 5 uses
+        face_quality directly with no further visibility multiplier.
+
+        Sharpness cap is 400 (raised from 150).  Broadcast close-ups
+        regularly exceed 150, so the old cap saturated for most sharp
+        frames and stopped discriminating in the range that matters.
+        """
+        x1, y1, x2, y2 = map(int, f.bbox.tolist())
+        x1 = max(0, x1); y1 = max(0, y1)
+        x2 = min(w - 1, x2); y2 = min(h - 1, y2)
+
+        area_px = float(max(0.0, x2 - x1) * max(0.0, y2 - y1))
+        coverage = area_px / img_area
+
+        # SIZE SCORE
+        if 0.12 <= coverage <= 0.50:
+            size_score = 1.0
+        elif coverage < 0.12:
+            size_score = min(coverage / 0.12, 1.0)
+        else:
+            size_score = max(1.0 - (coverage - 0.50) / 0.30, 0.5)
+
+        # POSITION SCORE
+        fx, fy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        dist = np.sqrt((fx - cx) ** 2 + (fy - cy) ** 2)
+        max_dist = np.sqrt(cx ** 2 + cy ** 2)
+        pos_score = 1.0 - float(dist / max_dist) * 0.5
+
+        # DETECTION CONFIDENCE
+        det_score = float(getattr(f, "det_score", 0.5))
+
+        # SHARPNESS  (cap 400, was 150)
+        crop = img[y1:y2, x1:x2]
+        if crop.size > 0:
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+            sharp_norm = min(lap_var / 400.0, 1.0)
+        else:
+            sharp_norm = 0.0
+
+        # VISIBILITY — included in quality composite (single place, no duplication)
+        visibility = self.face_occlusion_score(f, w, h)
+
+        quality = (
+            0.20 * size_score  +
+            0.15 * pos_score   +
+            0.25 * det_score   +
+            0.25 * sharp_norm  +
+            0.15 * visibility
+        )
+
+        return coverage, float(quality), det_score, float(visibility), area_px
+
+    def face_quality(self, path: str) -> Tuple[int, float, float, float, float, List, Optional[np.ndarray]]:
+        """
+        Multi-face quality assessment — aggregates over all dominant faces.
+
+        A celebration frame with 4 players raising their arms should score
+        higher than a frame with a single partially-occluded face.
+        `_select_dominant_faces` returns every face that is at least 35% the
+        size of the primary face (i.e. all prominent subjects); background
+        players that are too small are excluded.
+
+        Aggregation across N dominant faces
+        ------------------------------------
+        face_area    : sum of individual coverages, capped at 1.0.
+                       More big faces = more total subject content.
+        face_quality : area-weighted mean.
+                       Larger faces drive the composite more than small ones.
+        face_det     : minimum across dominant faces.
+                       A frame is only as reliable as its weakest detection.
+        face_visibility : area-weighted mean.
+                       Occlusion of each subject weighted by how prominent it is.
+
+        FIX – primary face selection (from previous fix, now generalised to N):
+            Previously each metric was independently maximised across all
+            faces so face_q, face_area, face_det and face_visibility could
+            come from four different faces.
+
+        FIX – visibility excluded from quality composite:
+            Was baked into quality (0.20 weight) AND applied again as
+            visibility_mod in Stage 5, causing double penalisation.
+
+        FIX – sharpness cap raised 150 → 400.
+
+        Returns
+        -------
+        num_faces    : int   – total detected faces (all, including background)
+        face_area    : float – summed dominant-face coverage, capped at 1.0
+        face_quality : float – area-weighted mean quality score [0..1]
+        face_det     : float – minimum detection confidence across dominant faces
+        face_vis     : float – area-weighted mean visibility score [0..1]
+        detected_faces : List  – all raw InsightFace face objects
+        img            : np.ndarray | None
         """
         img = cv2.imread(path)
         if img is None:
-            return 0, 0.0, 0.0, 0.0, [], None
+            return 0, 0.0, 0.0, 0.0, 0.0, [], None
 
         faces = self.face_app.get(img)
         if not faces:
-            return 0, 0.0, 0.0, 0.0, [], img
+            return 0, 0.0, 0.0, 0.0, 0.0, [], img
 
         h, w = img.shape[:2]
         img_area = float(h * w)
         cx, cy = w / 2.0, h / 2.0
 
-        largest = 0.0
-        best_q = 0.0
-        best_det = 0.0
+        # Select all dominant faces (primary + any prominent secondaries)
+        dominant_indices = self._select_dominant_faces(faces, w, h)
 
-        for f in faces:
-            x1, y1, x2, y2 = map(int, f.bbox.tolist())
-            x1 = max(0, x1); y1 = max(0, y1)
-            x2 = min(w - 1, x2); y2 = min(h - 1, y2)
+        # Compute per-face metrics for each dominant face
+        coverages:     List[float] = []
+        qualities:     List[float] = []
+        det_scores:    List[float] = []
+        visibilities:  List[float] = []
+        area_weights:  List[float] = []
 
-            area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
-            largest = max(largest, area)
-
-            face_coverage = area / img_area
-
-            # ---------- SIZE SCORE ----------
-            if 0.12 <= face_coverage <= 0.50:
-                size_score = 1.0
-            elif face_coverage < 0.12:
-                size_score = min(face_coverage / 0.12, 1.0)
-            else:
-                size_score = max(1.0 - (face_coverage - 0.50) / 0.30, 0.5)
-
-            # ---------- POSITION SCORE ----------
-            fx, fy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-            dist = np.sqrt((fx - cx) ** 2 + (fy - cy) ** 2)
-            max_dist = np.sqrt(cx**2 + cy**2)
-            pos_score = 1.0 - float(dist / max_dist) * 0.5
-
-            # ---------- DETECTION CONF ----------
-            det_score = float(getattr(f, "det_score", 0.5))
-            best_det = max(best_det, det_score)
-
-            # ---------- FACE SHARPNESS ----------
-            crop = img[y1:y2, x1:x2]
-            if crop.size > 0:
-                gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                lap_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-
-                # Normalize (tuneable)
-                sharp_norm = min(lap_var / 150.0, 1.0)
-            else:
-                sharp_norm = 0.0
-
-            # ---------- FINAL FACE QUALITY ----------
-            q = (
-                0.30 * size_score +
-                0.20 * pos_score +
-                0.25 * det_score +
-                0.25 * sharp_norm
+        for idx in dominant_indices:
+            coverage, quality, det, vis, area_px = self._face_metrics(
+                faces[idx], img, img_area, cx, cy, w, h
             )
+            coverages.append(coverage)
+            qualities.append(quality)
+            det_scores.append(det)
+            visibilities.append(vis)
+            area_weights.append(area_px)
 
-            best_q = max(best_q, float(q))
+        total_weight = sum(area_weights) or 1.0
 
+        # face_area: summed coverage capped at 1.0
+        agg_area = float(min(sum(coverages), 1.0))
 
-        num = int(len(faces))
-        largest_norm = float(largest / img_area)
-        return num, largest_norm, float(best_q), float(best_det), faces, img
+        # face_quality: area-weighted mean (larger faces count more)
+        agg_quality = float(
+            sum(q * w_ for q, w_ in zip(qualities, area_weights)) / total_weight
+        )
+
+        # face_det: minimum — only as reliable as the weakest detection
+        agg_det = float(min(det_scores))
+
+        # face_visibility: area-weighted mean
+        agg_vis = float(
+            sum(v * w_ for v, w_ in zip(visibilities, area_weights)) / total_weight
+        )
+
+        return int(len(faces)), agg_area, agg_quality, agg_det, agg_vis, faces, img
     
-    # -----------------------
-    # IQA 
-    # -----------------------
     def iqa_norm_batch(self, paths: List[str]) -> List[float]:
-        scores = [0.5] * len(paths)
-        
+        """
+        Compute globally consistent IQA scores using TOPIQ.
+
+        Returns:
+            List of IQA scores (float), same order as input paths
+        """
+
+        scores = [0.5] * len(paths)  # fallback default
+
         valid = []
         pil_images = []
+
+        # -----------------------
+        # Load images / check cache
+        # -----------------------
         for idx, path in enumerate(paths):
             if path in self._iqa_cache:
                 scores[idx] = self._iqa_cache[path]
@@ -492,28 +789,34 @@ class SOTAModels:
                     pil_images.append(img)
                     valid.append((idx, path))
                 except Exception:
+                    # keep fallback score (0.5)
                     pass
 
         if not pil_images:
             return scores
 
+        # -----------------------
+        # Run TOPIQ (raw scores)
+        # -----------------------
         for (idx, path), img in zip(valid, pil_images):
             try:
                 s = self.iqa(img)
                 s = float(s.item()) if hasattr(s, "item") else float(s)
 
+                # Handle metrics where lower is better
                 if getattr(self.iqa, "lower_better", False):
                     s = -s
 
-                s = float(np.clip(s, -5.0, 5.0))
-                s_norm = (s + 5.0) / 10.0
+                # Optional safety clamp (TOPIQ usually already in [0,1])
+                s = float(np.clip(s, 0.0, 1.0))
+
             except Exception as e:
                 if self.debug:
                     print(f"[IQA] Error: {e}")
-                s_norm = 0.5
+                s = 0.5
 
-            scores[idx] = s_norm
-            self._iqa_cache[path] = s_norm
+            scores[idx] = s
+            self._iqa_cache[path] = s
 
         return scores
 
@@ -566,7 +869,7 @@ class SOTAModels:
             "Sadness": 6,
             "Surprise": 7,
         }
-        expressive = ["Happiness", "Surprise", "Anger"]
+        expressive = ["Happiness", "Surprise", "Anger", "Fear", "Disgust", "Contempt", "Sadness"]  # exclude Neutral
 
         best_intensity = 0.0
         best_label = "none"
@@ -597,4 +900,3 @@ class SOTAModels:
         result = (float(np.clip(best_intensity, 0.0, 1.0)), best_label)
         self._emotion_cache[path] = result 
         return result
-    
