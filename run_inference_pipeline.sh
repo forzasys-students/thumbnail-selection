@@ -93,6 +93,7 @@ python src/inference/keyframe_selector.py \
     --output_csv "$KEYFRAME_CSV" \
     --output_dir "$KEYFRAME_DIR" \
     --video_id "$VIDEO_ID" \
+    --fps "$FPS" \
     --redundancy_reduction "$REDUNDANCY_ARG" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Keyframe selection failed"; exit 1; fi
