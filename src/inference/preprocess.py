@@ -263,60 +263,71 @@ def motion_blur_score(path: str) -> float:
 
 
 # -----------------------
-# Cut/transition masking
+# Single-read metric computation
 # -----------------------
 
-def _downscaled_gray(path: str, width: int = 160) -> Optional[np.ndarray]:
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
+def compute_frame_metrics(path: str) -> Optional[Dict]:
+    """
+    Read the image once and compute all preprocessing metrics from the same
+    in-memory array. This replaces calling compute_luminance, compute_sharpness,
+    compute_uniformity, transition_overlay_score, and texture_proxy separately,
+    which each re-read the image from disk.
+
+    Returns None if the image cannot be read (treat as failed / drop frame).
+
+    Returns a dict with keys:
+        luminance   - ITU-R BT.709 mean luminance [0-255]
+        sharpness   - mean Sobel gradient magnitude
+        uniformity  - top-5% histogram CDF score [0-1]
+        overlay     - grayscale stddev (transition proxy)
+        texture     - Canny edge density [0-100]
+    """
+    img_bgr = cv2.imread(path)
+    if img_bgr is None:
         return None
-    h, w = img.shape[:2]
-    if w <= 0:
-        return None
-    scale = float(width) / float(w)
+
+    # ---- Luminance (ITU-R BT.709) ----
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
+    luminance = float(np.mean(
+        0.2126 * img_rgb[:, :, 0] +
+        0.7152 * img_rgb[:, :, 1] +
+        0.0722 * img_rgb[:, :, 2]
+    ))
+
+    # ---- Grayscale (shared for remaining metrics) ----
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+
+    # ---- Sharpness (Sobel gradient magnitude) ----
+    grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    sharpness = float(np.mean(np.sqrt(grad_x ** 2 + grad_y ** 2)))
+
+    # ---- Uniformity (top-5% histogram CDF) ----
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).flatten()
+    hist = hist / (hist.sum() + 1e-6)
+    sorted_hist = np.sort(hist)[::-1]
+    top_idx = max(1, int(0.05 * len(sorted_hist)))
+    uniformity = float(np.cumsum(sorted_hist)[top_idx - 1])
+
+    # ---- Overlay proxy (grayscale stddev) ----
+    overlay = float(cv2.meanStdDev(gray)[1][0][0])
+
+    # ---- Texture proxy (Canny edge density on downscaled image) ----
+    h, w = gray.shape[:2]
+    scale = 160.0 / max(w, 1)
     if scale < 1.0:
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    return img
+        small = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        small = gray
+    edges = cv2.Canny(small, 60, 180)
+    texture = float(np.mean(edges > 0) * 100.0)
 
+    return {
+        "luminance": luminance,
+        "sharpness": sharpness,
+        "uniformity": uniformity,
+        "overlay": overlay,
+        "texture": texture,
+    }
 
-def detect_and_mask_cuts(
-    sorted_paths: Sequence[str],
-    diff_thresh: float,
-    drop_radius: int,
-) -> Set[str]:
-    """
-    Return a set of paths to drop around detected cuts/transitions.
-
-    This implements the "Transitioning frames" filter from HECATE paper Section 3.1.
-
-    diff_thresh: mean abs diff on downscaled grayscale [0-255]
-    drop_radius: drop +/- this many extracted frames around a cut
-    """
-    to_drop: Set[str] = set()
-    if len(sorted_paths) < 3:
-        return to_drop
-
-    prev = _downscaled_gray(sorted_paths[0])
-    if prev is None:
-        return to_drop
-
-    diffs: List[float] = []
-    for i in range(1, len(sorted_paths)):
-        cur = _downscaled_gray(sorted_paths[i])
-        if cur is None:
-            diffs.append(0.0)
-            prev = cur
-            continue
-        if cur.shape != prev.shape:
-            cur = cv2.resize(cur, (prev.shape[1], prev.shape[0]), interpolation=cv2.INTER_AREA)
-        d = float(np.mean(cv2.absdiff(cur, prev)))
-        diffs.append(d)
-        prev = cur
-
-    # diffs[i-1] corresponds to boundary between i-1 and i
-    for i, d in enumerate(diffs, start=1):
-        if d >= diff_thresh:
-            for j in range(max(0, i - drop_radius), min(len(sorted_paths), i + drop_radius + 1)):
-                to_drop.add(sorted_paths[j])
-    return to_drop
 
