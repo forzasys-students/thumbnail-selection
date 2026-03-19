@@ -173,18 +173,26 @@ class ThumbnailCompositor:
             "arial black": [
                 "C:\\Windows\\Fonts\\ariblk.ttf",
                 "/usr/share/fonts/truetype/msttcorefonts/Arial_Black.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             ],
             "bebas neue": [
                 "C:\\Windows\\Fonts\\bebasneue-regular.ttf",
+                "C:\\Windows\\Fonts\\BebasNeue-Regular.ttf",
                 "fonts/BebasNeue-Regular.ttf",
+                "/usr/local/share/fonts/BebasNeue-Regular.ttf",
+                "/usr/share/fonts/truetype/bebas-neue/BebasNeue-Regular.ttf",
             ],
             "montserrat": [
                 "C:\\Windows\\Fonts\\Montserrat-Bold.ttf",
                 "fonts/Montserrat-Bold.ttf",
+                "/usr/local/share/fonts/Montserrat-Bold.ttf",
+                "/usr/share/fonts/truetype/montserrat/Montserrat-Bold.ttf",
             ],
             "oswald": [
                 "C:\\Windows\\Fonts\\Oswald-Bold.ttf",
                 "fonts/Oswald-Bold.ttf",
+                "/usr/local/share/fonts/Oswald-Bold.ttf",
+                "/usr/share/fonts/truetype/oswald/Oswald-Bold.ttf",
             ],
         }
 
@@ -196,6 +204,10 @@ class ThumbnailCompositor:
                     break
                 except Exception:
                     pass
+
+        if font is None:
+            # Last resort: download from Google Fonts and cache locally
+            font = self._download_google_font(font_family.lower(), size)
 
         if font is None:
             for fallback in [
@@ -214,6 +226,40 @@ class ThumbnailCompositor:
 
         self._font_cache[cache_key] = font
         return font
+
+    # Google Fonts static download URLs for the supported web fonts
+    _GF_URLS = {
+        "bebas neue": "https://fonts.gstatic.com/s/bebasneue/v21/JTUSjIg69CK48gW7PXoo9WdhyyTh89ZNpQ.woff2",
+        "montserrat": "https://fonts.gstatic.com/s/montserrat/v29/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCuM73w5aXp-p7K4KLg.woff2",
+        "oswald":     "https://fonts.gstatic.com/s/oswald/v53/TK3_WkUHHAIjg75cFRf3bXL8LICs1_FvsUZiZQ.woff2",
+    }
+    _GF_TTF_URLS = {
+        "bebas neue": "https://github.com/dharmatype/Bebas-Neue/raw/master/Fonts/BN_TTF/BebasNeue-Regular.ttf",
+        "montserrat": "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-Bold.ttf",
+        "oswald":     "https://github.com/googlefonts/OswaldFont/raw/main/fonts/ttf/Oswald-Bold.ttf",
+    }
+
+    def _download_google_font(self, family_lower: str, size: int):
+        """Download a TTF from GitHub/Google Fonts and cache it in ./fonts/"""
+        ttf_url = self._GF_TTF_URLS.get(family_lower)
+        if not ttf_url:
+            return None
+        os.makedirs("fonts", exist_ok=True)
+        safe_name = family_lower.replace(" ", "_")
+        local_path = f"fonts/{safe_name}.ttf"
+        if not os.path.exists(local_path):
+            try:
+                r = requests.get(ttf_url, timeout=10)
+                r.raise_for_status()
+                with open(local_path, "wb") as f:
+                    f.write(r.content)
+            except Exception as e:
+                print(f"[Font] Could not download {family_lower}: {e}")
+                return None
+        try:
+            return ImageFont.truetype(local_path, size)
+        except Exception:
+            return None
 
     def _hex_to_rgb(self, hex_color: str) -> Tuple[int, int, int]:
         hex_color = hex_color.lstrip("#")

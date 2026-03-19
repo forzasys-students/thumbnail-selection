@@ -121,7 +121,7 @@ def call_sam3_segmentation(
 def compose_thumbnail(
     image_path: str,
     mask_path: str,
-    text_elements: list,
+    elements: list,
     background_color: str = "#000000",
     output_path: str = None,
     # NEW params forwarded from the frontend
@@ -130,17 +130,17 @@ def compose_thumbnail(
     blur_radius: int = 12,
 ) -> str:
     """
-    Compose final thumbnail with player cutout and text overlays.
+    Compose final thumbnail with player cutout and graphic overlays.
 
     Args:
-        image_path:      Original image path
-        mask_path:       Segmentation mask path
-        text_elements:   List of text overlay configurations
+        image_path:       Original image path
+        mask_path:        Segmentation mask path
+        elements:         List of graphic element configurations (text, rect, logo)
         background_color: Background color (hex)
-        output_path:     Output thumbnail path
-        player_layer:    'foreground' (default) or 'background'
-        blur_background: If True, background is blurred but player stays sharp
-        blur_radius:     Blur strength in pixels
+        output_path:      Output thumbnail path
+        player_layer:     'foreground' (default) or 'background'
+        blur_background:  If True, background is blurred but player stays sharp
+        blur_radius:      Blur strength in pixels
 
     Returns:
         str: Path to created thumbnail
@@ -152,7 +152,7 @@ def compose_thumbnail(
     thumbnail_path = compositor.create_thumbnail(
         image_path=image_path,
         mask_path=mask_path,
-        text_elements=text_elements,
+        elements=elements,
         background_color=background_color,
         output_path=output_path,
         player_layer=player_layer,

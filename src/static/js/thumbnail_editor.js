@@ -56,6 +56,8 @@ class ThumbnailEditor {
             this.originalImage = await this._loadImg(`/keyframes/${this.imageFilename}`);
             this.canvas.width = this.originalImage.naturalWidth;
             this.canvas.height = this.originalImage.naturalHeight;
+            // Wait for custom web fonts (Bebas Neue, Montserrat, Oswald) before painting
+            await document.fonts.ready;
             this._render();
         } catch (e) {
             this.showError('Failed to load image: ' + e.message);
@@ -173,7 +175,9 @@ class ThumbnailEditor {
     // ── Text ──────────────────────────────────────────────────────────────────
     _drawText(ctx, el) {
         const { content, x, y, fontSize, color, strokeColor, strokeWidth, fontFamily, fontWeight } = el;
-        ctx.font = `${fontWeight || 'bold'} ${fontSize}px ${fontFamily || 'Impact'}, Arial Black, sans-serif`;
+        // Quote the family name so multi-word names ("Arial Black", "Bebas Neue" …) work
+        const family = fontFamily || 'Impact';
+        ctx.font = `${fontWeight || 'bold'} ${fontSize}px "${family}", sans-serif`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
 
@@ -268,7 +272,7 @@ class ThumbnailEditor {
 
         let x, y, w, h;
         if (el.type === 'text') {
-            ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
+            ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px "${el.fontFamily || 'Impact'}", sans-serif`;
             w = ctx.measureText(el.content).width;
             h = el.fontSize * 1.2;
             x = el.x;
@@ -490,6 +494,26 @@ class ThumbnailEditor {
         this._emitElements();
     }
 
+    // Move element later in the array → drawn last → visually on top
+    moveElementUp(id) {
+        const idx = this.elements.findIndex(e => e.id === id);
+        if (idx < this.elements.length - 1) {
+            [this.elements[idx], this.elements[idx + 1]] = [this.elements[idx + 1], this.elements[idx]];
+            this._render();
+            this._emitElements();
+        }
+    }
+
+    // Move element earlier in the array → drawn first → visually behind
+    moveElementDown(id) {
+        const idx = this.elements.findIndex(e => e.id === id);
+        if (idx > 0) {
+            [this.elements[idx], this.elements[idx - 1]] = [this.elements[idx - 1], this.elements[idx]];
+            this._render();
+            this._emitElements();
+        }
+    }
+
 
     // =========================================================================
     // Mouse Interaction
@@ -504,7 +528,7 @@ class ThumbnailEditor {
 
     _hitTest(px, py, el) {
         if (el.type === 'text') {
-            this.ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
+            this.ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px "${el.fontFamily || 'Impact'}", sans-serif`;
             const w = this.ctx.measureText(el.content).width;
             const h = el.fontSize * 1.2;
             return px >= el.x && px <= el.x + w && py >= el.y && py <= el.y + h;
@@ -613,7 +637,7 @@ class ThumbnailEditor {
 // UI Integration
 // =============================================================================
 
-function openThumbnailEditor(filename, metadata = null) {
+async function openThumbnailEditor(filename, metadata = null) {
     let modal = document.getElementById('te-modal');
     if (!modal) {
         modal = _buildModal();
@@ -624,6 +648,24 @@ function openThumbnailEditor(filename, metadata = null) {
 
     const editor = new ThumbnailEditor(filename, 'te-canvas');
     window._editor = editor;
+
+    // If metadata wasn't pre-fetched by caller, fetch it now
+    if (!metadata) {
+        try {
+            const res  = await fetch(`/api/video-metadata/${encodeURIComponent(filename)}`);
+            const data = await res.json();
+            // Only use metadata when the API confirmed a real video_id match
+            if (data.success && data.matched === true && data.metadata) {
+                metadata = data.metadata;
+            } else {
+                metadata = null; // no match → hide score/logo buttons
+            }
+        } catch (err) {
+            console.warn('[ThumbnailEditor] Metadata fetch failed:', err);
+            metadata = null;
+        }
+    }
+
     editor.init(metadata);
     _wireControls(editor);
 }
@@ -644,10 +686,16 @@ function teAddText() {
     if (v) window._editor.addText(v);
 }
 function teAddRect() {
-    window._editor.addRect(100, 100, { width: 300, height: 150, fillColor: '#1a73e8', cornerRadius: 8 });
+    window._editor.addRect(100, 100, { width: 1200, height: 75, fillColor: '#000000', cornerRadius: 8 });
 }
 function teDelElement(id) {
     window._editor.deleteElement(id);
+}
+function teMoveUp(id) {
+    window._editor.moveElementUp(id);
+}
+function teMoveDown(id) {
+    window._editor.moveElementDown(id);
 }
 function teProp(id, k, v) {
     window._editor.updateElement(id, { [k]: v });
@@ -699,6 +747,10 @@ function _buildModal() {
     m.id = 'te-modal';
     m.className = 'thumbnail-modal';
     m.innerHTML = `
+    <!-- Google Fonts – loaded inside modal so canvas can use them -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Montserrat:wght@700;900&family=Oswald:wght@600;700&display=swap" rel="stylesheet">
     <div class="modal-backdrop" onclick="closeThumbnailEditor()"></div>
     <div class="modal-content-wrapper">
 
@@ -777,6 +829,9 @@ function _buildModal() {
           <!-- Elements List -->
           <section class="control-section">
             <h3>Elements</h3>
+            <p style="margin:0 0 6px;font-size:10px;color:#555;line-height:1.4;">
+              ▲ = draw on top &nbsp;·&nbsp; ▼ = draw behind
+            </p>
             <div id="te-elements"></div>
           </section>
 
@@ -867,7 +922,8 @@ function _onElementsChanged(e) {
     }
 
     list.innerHTML = '';
-    elements.forEach(el => {
+    // Reverse so the topmost element in the list is drawn last (on top)
+    [...elements].reverse().forEach(el => {
         const div = document.createElement('div');
         div.className = 'element-item' + (el.id === selectedId ? ' selected' : '');
 
@@ -920,7 +976,13 @@ function _onElementsChanged(e) {
         div.innerHTML = `
           <div class="element-header">
             <strong>${title}</strong>
-            <button class="btn-delete" onclick="teDelElement(${el.id})">&times;</button>
+            <div style="display:flex;gap:4px;align-items:center;">
+              <button class="btn-delete" title="Move up (draw on top)" style="background:#1a2e1a;color:#8bc98b;font-size:13px;"
+                      onclick="teMoveUp(${el.id})">▲</button>
+              <button class="btn-delete" title="Move down (draw behind)" style="background:#1a1a2e;color:#8b8bc9;font-size:13px;"
+                      onclick="teMoveDown(${el.id})">▼</button>
+              <button class="btn-delete" onclick="teDelElement(${el.id})">&times;</button>
+            </div>
           </div>
           <div class="element-controls">
             ${controls}
