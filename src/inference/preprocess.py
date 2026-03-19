@@ -9,7 +9,6 @@ Includes:
 - Luminance filtering (detect dark frames)
 - Sharpness filtering (detect blurry frames) 
 - Uniformity filtering (detect flat/uniform frames)
-- Cut/transition detection and masking
 
 """
 
@@ -194,14 +193,6 @@ def filter_low_quality_frames(
 # Additional quality metrics
 # -----------------------
 
-def transition_overlay_score(path: str) -> float:
-    """Stddev of grayscale intensity. Cheap proxy to avoid flat frames."""
-    img = cv2.imread(path)
-    if img is None:
-        return 0.0
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    return float(cv2.meanStdDev(gray)[1][0][0])
-
 def texture_proxy(path: str) -> float:
     """
     Edge density proxy (percentage-ish).
@@ -218,50 +209,6 @@ def texture_proxy(path: str) -> float:
     return float(np.mean(edges > 0) * 100.0)
 
 
-def motion_blur_score(path: str) -> float:
-    """
-    Detect motion blur using gradient variance ratio.
-    
-    Returns:
-        score (0-1): Higher = less motion blur (better for thumbnails)
-    """
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)  # ← Already grayscale
-    if img is None:
-        return 0.0
-    
-    # Grayscale images have shape (h, w), not (h, w, 3)
-    h, w = img.shape[:2]  
-    
-    # Downscale for speed
-    if max(h, w) > 480:
-        scale = 480.0 / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-    
-    # Sobel gradients
-    gx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
-    gy = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
-    
-    # Variance of gradients
-    var_gx = np.var(gx)
-    var_gy = np.var(gy)
-    
-    if var_gx < 1e-6 or var_gy < 1e-6:
-        return 0.0  # Flat image
-    
-    # Ratio should be near 1.0 for sharp, far from 1.0 for directional blur
-    ratio = min(var_gx, var_gy) / max(var_gx, var_gy)
-    
-    # Also check gradient magnitude variance (sharp = high variance)
-    grad_mag = np.sqrt(gx**2 + gy**2)
-    mag_var = np.var(grad_mag)
-    mag_norm = np.clip(mag_var / 5000.0, 0.0, 1.0)
-    
-    # Combined score
-    score = 0.6 * ratio + 0.4 * mag_norm
-    
-    return float(np.clip(score, 0.0, 1.0))
-
-
 # -----------------------
 # Single-read metric computation
 # -----------------------
@@ -270,7 +217,7 @@ def compute_frame_metrics(path: str) -> Optional[Dict]:
     """
     Read the image once and compute all preprocessing metrics from the same
     in-memory array. This replaces calling compute_luminance, compute_sharpness,
-    compute_uniformity, transition_overlay_score, and texture_proxy separately,
+    compute_uniformity, and texture_proxy separately,
     which each re-read the image from disk.
 
     Returns None if the image cannot be read (treat as failed / drop frame).
@@ -279,7 +226,6 @@ def compute_frame_metrics(path: str) -> Optional[Dict]:
         luminance   - ITU-R BT.709 mean luminance [0-255]
         sharpness   - mean Sobel gradient magnitude
         uniformity  - top-5% histogram CDF score [0-1]
-        overlay     - grayscale stddev (transition proxy)
         texture     - Canny edge density [0-100]
     """
     img_bgr = cv2.imread(path)
@@ -309,9 +255,6 @@ def compute_frame_metrics(path: str) -> Optional[Dict]:
     top_idx = max(1, int(0.05 * len(sorted_hist)))
     uniformity = float(np.cumsum(sorted_hist)[top_idx - 1])
 
-    # ---- Overlay proxy (grayscale stddev) ----
-    overlay = float(cv2.meanStdDev(gray)[1][0][0])
-
     # ---- Texture proxy (Canny edge density on downscaled image) ----
     h, w = gray.shape[:2]
     scale = 160.0 / max(w, 1)
@@ -326,7 +269,6 @@ def compute_frame_metrics(path: str) -> Optional[Dict]:
         "luminance": luminance,
         "sharpness": sharpness,
         "uniformity": uniformity,
-        "overlay": overlay,
         "texture": texture,
     }
 
