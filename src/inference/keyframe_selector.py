@@ -1,24 +1,18 @@
 # keyframe_selector.py
 """
-SOTA KEYFRAME SELECTION PIPELINE
+KEYFRAME SELECTION PIPELINE
 
 What this file does (high level):
+
 1) Load frame-level predictions (pred_csv) + segment ranges (seg_csv)
 2) For each segment:
-   A) HECATE-style preprocessing filters (luminance/sharpness/uniformity + extensions) to remove bad frames
+   A) HECATE-style preprocessing filters (luminance/sharpness/uniformity) to remove bad frames
    B) Redundancy reduction to remove near-duplicates + Logo detection filter to remove branded frames 
    C) Scoring signals (face/emotion/pose - detection)
    D) Image quality assessment (TOPIQ) on segment candidates
    E) Compute final score and keep only strong candidates
-   F) Redundancy reduction to remove near-duplicate frames
 3) Global selection across all segments 
 4) Save selected keyframes and a CSV with score breakdown
-
-Close up shot types:
-- P1_player_referee - BEST thumbnails
-- P2_corner 
-- P3_side_staff 
-- P4_behind_goal 
 
 """
 
@@ -45,7 +39,7 @@ from tqdm import tqdm
 # -----------------------
 from preprocess import (
     extract_frame_index,        # parse frame index from "frame_00123.jpg"
-    compute_frame_metrics,      # HECATE filters, plus overlay and texture proxies
+    compute_frame_metrics,      # HECATE filters, plus texture proxies
 )
 
 # =============================================================================
@@ -60,53 +54,40 @@ SEGMENT_SCORE_MULT = {
     "P4_behind_goal": 1.00,      # Baseline - goalkeeper shots, different angle
 }
 
-# Global quota fractions: ensures variety across closeup types.
-SEGMENT_QUOTA_FRAC = {
-    "P1_player_referee": 0.70,   # 70% from player/referee closeups
-    "P2_corner": 0.10,           # 10% from corner closeups
-    "P3_side_staff": 0.10,       # 10% from staff/bench closeups
-    "P4_behind_goal": 0.10,      # 10% from behind-goal closeups
-}
-
 # Shot-type-specific thresholds for filtering.
 QUALITY_THRESHOLDS = {
     "P1_player_referee": {
         "min_luminance": 50.0,       # reject dark frames
-        "min_sharpness": 15.0,       # reject blurry frames (gradient magnitude)
+        "min_sharpness": 20.0,       # reject blurry frames (gradient magnitude)
         "max_uniformity": 0.70,       # reject flat/uniform frames
         "min_texture": 5.0,          # edge density check
         "min_closeup_ratio": 0.05,   # pose-based closeup proxy (tune this based on your pose model's output)
-        "min_iqa_norm": 0.05,        
     },
     "P2_corner": {
         "min_luminance": 50.0,       
-        "min_sharpness": 15.0,       
+        "min_sharpness": 20.0,       
         "max_uniformity": 0.70,       
         "min_texture": 5.0,
         "min_closeup_ratio": 0.05,    
-        "min_iqa_norm": 0.0,        
     },
     "P3_side_staff": {
         "min_luminance": 50.0,
-        "min_sharpness": 15.0,
+        "min_sharpness": 20.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
         "min_closeup_ratio": 0.05,   
-        "min_iqa_norm": 0.0,
     },
     "P4_behind_goal": {
         "min_luminance": 50.0,
-        "min_sharpness": 15.0,
+        "min_sharpness": 20.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
         "min_closeup_ratio": 0.05,    
-        "min_iqa_norm": 0.0,
     },
 }
 
-
 ENABLE_REDUNDANCY_REDUCTION = True  # Removes near-duplicate frames. Turn off to disable.
-USE_QUOTA_SELECTION = False         # True = quota-based, False = global ranking
+TEMPORAL_WINDOW = 18  # frames (1 second at 24fps) - used in redundancy reduction and final selection to ensure temporal diversity.
 
 # Fallback parameters 
 ALLOW_SCORE_FLOOR_FALLBACK = True    # Enable/disable fallback
@@ -134,104 +115,6 @@ WEIGHTS = normalize_weights({
     "pose": 0.20,            # pose signal
 })
 
-# Compute a single proxy score from the raw metrics to use for early redundancy reduction (before heavy models).
-def compute_proxy_from_metrics(luminance, sharpness, texture):
-
-    # Normalize signals
-    sharp_norm = min(sharpness, 200.0) / 200.0
-    lum_norm = np.clip((luminance - 40.0) / 140.0, 0.0, 1.0)
-    tex_norm = np.clip(texture / 50.0, 0.0, 1.0)
-
-    proxy = (
-        0.6 * sharp_norm +
-        0.2 * lum_norm +
-        0.2 * tex_norm 
-    )
-
-    return float(np.clip(proxy, 0.0, 1.0))
-
-
-# =============================================================================
-# QUOTA SELECTION 
-# =============================================================================
-
-def _quota_select(all_candidates: List[dict], top_n: int) -> List[dict]:
-    """
-    Select final keyframes across all segments using:
-    1) Bucket quotas based on SEGMENT_QUOTA_FRAC
-    2) Within each bucket: pick highest final_score first
-
-    Inputs
-    ------
-    all_candidates: list of candidates from all segments (already scored + filtered)
-    top_n: total number of keyframes to output
-
-    Output
-    ------
-    final list of candidates (<= top_n)
-    """
-    # Bucket candidates by segment priority.
-    buckets = {k: [] for k in SEGMENT_QUOTA_FRAC.keys()}
-    for c in all_candidates:
-        sp = c.get("segment_priority", None)
-        if sp in buckets:
-            buckets[sp].append(c)
-
-    # Sort each bucket by best score first.
-    for sp in buckets:
-        buckets[sp] = sorted(buckets[sp], key=lambda x: x["final_score"], reverse=True)
-
-    # Compute integer quotas by floor, then distribute remaining slots round-robin.
-    keys = list(SEGMENT_QUOTA_FRAC.keys())
-    quotas: Dict[str, int] = {}
-    remaining = top_n
-
-    for sp in keys:
-        q = int(np.floor(SEGMENT_QUOTA_FRAC[sp] * top_n))
-        quotas[sp] = q
-        remaining -= q
-
-    i = 0
-    while remaining > 0:
-        quotas[keys[i % len(keys)]] += 1
-        remaining -= 1
-        i += 1
-
-    final: List[dict] = []
-    used = set()
-
-    def add(sorted_list: List[dict], need: int) -> int:
-        """
-        Add up to `need` frames from sorted_list into final, respecting:
-        - no duplicates by path
-        """
-        nonlocal final
-        added = 0
-        for cand in sorted_list:
-            if added >= need:
-                break
-            if cand["path"] in used:
-                continue
-
-            # Frame index parsed from filename; used for time-gap filtering.
-            ci = extract_frame_index(cand["path"])
-
-            final.append(cand)
-            used.add(cand["path"])
-            added += 1
-        return added
-
-    # First pass: fill quotas bucket by bucket.
-    for sp in keys:
-        add(buckets[sp], quotas[sp])
-
-    # Second pass: if still short, fill from best overall (still respecting gap).
-    if len(final) < top_n:
-        overall = sorted(all_candidates, key=lambda x: x["final_score"], reverse=True)
-        add(overall, top_n - len(final))
-    
-    return final
-
 
 # =============================================================================
 # MAIN PIPELINE ENTRYPOINT
@@ -248,10 +131,9 @@ def select_keyframes(
     debug: bool = True,
     video_id: str = "unknown",
     redundancy_reduction: bool = True,
-    fps: float = 24.0,
 ):
     """
-    This is the main selection stage (STEP 4 in your pipeline).
+    This is the main selection stage (STEP 4 in the pipeline).
 
     It expects:
     - pred_csv: per-frame classifier output (frame_path, predicted label, confidence, etc.)
@@ -284,14 +166,12 @@ def select_keyframes(
 
     # ---- Analytics: counters and timing so you can tell what is happening ----
     analytics = {
-        "frames_processed": 0,            # after confidence gate (MIN_FINAL_CONF)
+        "frames_processed": 0,            
         "frames_filtered_conf": 0,        # dropped by classifier confidence
     
         "frames_filtered_luminance": 0,
         "frames_filtered_sharpness": 0,
         "frames_filtered_uniformity": 0,
-
-        "frames_filtered_overlay": 0,     # dropped by overlay proxy threshold
         "frames_filtered_texture": 0,     # dropped by texture (uniformity) threshold
 
         "frames_filtered_closeup": 0,     # dropped by pose-derived closeup threshold
@@ -306,14 +186,14 @@ def select_keyframes(
             "P4_behind_goal": 0
         },
         "timing": {
-            "preprocess_sec": 0.0,          # cheap stage
-            "redundancy_sec": 0.0,
-            "logo_sec": 0.0,
-            "face_sec": 0.0,                # face quality + detection
-            "emotion_sec": 0.0,             # emotion intensity
-            "pose_sec": 0.0,                # pose detection
-            "iqa_sec": 0.0,                 # TOPIQ only 
-            "sota_heavy_sec": 0.0,          # total heavy stage time
+            "preprocess_sec": 0.0,          # time spent on preprocess 
+            "redundancy_sec": 0.0,          # time spent on redundancy reduction 
+            "logo_sec": 0.0,                # time spent on logo detection 
+            "face_sec": 0.0,                # time spent on face quality + detection
+            "emotion_sec": 0.0,             # time spent on emotion detection
+            "pose_sec": 0.0,                # time spent on pose detection
+            "iqa_sec": 0.0,                 # time spent on IQA  
+            "sota_heavy_sec": 0.0,          # total time for heavier models (face/emotion/pose/IQA)
         }
     }
 
@@ -357,7 +237,7 @@ def select_keyframes(
         # STAGE 1: PREPROCESSING
         # ======================================================================
         if debug:
-            print("[PREPROCESS] >>> Stage 1: cheap filters (overlay/blur/texture/conf)")
+            print("[PREPROCESS] >>> Stage 1: cheap filters (blur/texture/conf)")
 
         t_pre = time.time()
 
@@ -381,7 +261,6 @@ def select_keyframes(
             luminance  = metrics["luminance"]
             sharpness  = metrics["sharpness"]
             uniformity = metrics["uniformity"]
-            overlay    = metrics["overlay"]
             tex        = metrics["texture"]
  
             if luminance < th["min_luminance"]:
@@ -396,16 +275,9 @@ def select_keyframes(
                 analytics["frames_filtered_uniformity"] += 1
                 continue
  
-            if overlay < 18:
-                analytics["frames_filtered_overlay"] += 1
-                continue
- 
             if tex < float(th.get("min_texture", 0.0)):
                 analytics["frames_filtered_texture"] += 1
                 continue
-
-
-            proxy_score = compute_proxy_from_metrics(luminance,sharpness,tex)
 
             # If it passes all cheap filters, keep it for the next stage.
             pre_items.append({
@@ -418,7 +290,6 @@ def select_keyframes(
                 "sharpness": float(sharpness),
                 "uniformity": float(uniformity),
                 "texture": float(tex),
-                "proxy_score": float(proxy_score),
             })
 
         analytics["timing"]["preprocess_sec"] += (time.time() - t_pre)
@@ -434,32 +305,23 @@ def select_keyframes(
             continue
 
 
-        # ==============================
+        # ============================================================
         # STAGE 2A: REDUNDANCY REDUCTION
-        # ==============================
-        # Hybrid: CLIP first (semantic near-duplicates), then temporal safety
-        # net for edge cases CLIP lets through — frames that look just different
-        # enough to survive the similarity threshold but whose frame indices are
-        # too close to be distinct moments.
-        # temporal_window is derived from fps so the window always represents
-        # 0.5s of real video time regardless of extraction rate.
-        #   5fps  -> window=3   (0.5s * 5  = 2.5, rounds to 3)
-        #   12fps -> window=6   (0.5s * 12 = 6)
-        #   24fps -> window=12  (0.5s * 24 = 12)
+        # ============================================================
+        
         t_rr = time.time()
         if redundancy_reduction and pre_items:
             before_rr = len(pre_items)
-            temporal_window = max(1, round(0.5 * fps))
             if debug:
-                print(f"[REDUNDANCY-EARLY] Before: {before_rr} | temporal_window={temporal_window} (0.5s @ {fps}fps)")
+                print(f"[REDUNDANCY-EARLY] Before: {before_rr} | temporal_window={TEMPORAL_WINDOW}")
  
             pre_items = reduce_redundancy(
                 pre_items,
                 method="hybrid",
-                visual_threshold=0.90,   # CLIP similarity 
-                visual_method="clip",    # semantic embeddings
-                temporal_window=temporal_window,
-                score_key="proxy_score",
+                visual_threshold=0.90,
+                visual_method="clip",
+                temporal_window=TEMPORAL_WINDOW,
+                score_key="aesthetic_score",   
                 top_k=1,
                 clip_device=device,
                 clip_batch_size=64,
@@ -477,6 +339,7 @@ def select_keyframes(
         # ======================================================================
         # STAGE 2B : LOGO DETECTION FILTER
         # ======================================================================
+
         t_logo = time.time()
         before_logo = len(pre_items)
         paths = [it["path"] for it in pre_items]
@@ -512,7 +375,7 @@ def select_keyframes(
 
 
         # ======================================================================
-        # STAGE 3: SCORING SIGNALS (face quality, emotion intensity, pose) + PRIORITY-BASED RANKING
+        # STAGE 3: SCORING SIGNALS (face, emotion, pose) + PRIORITY-BASED RANKING
         # ======================================================================
         if debug:
             print("[SOTA] >>> Stage 3: Scoring signals (face, emotion, pose)")
@@ -735,7 +598,6 @@ def select_keyframes(
             # ---------- FINAL SCORE ----------
             c["final_score"] = float(score_pre * c["segment_mult"])
 
-
             # ---------- STORE BREAKDOWN FOR CSV ----------
             c["face_signal"] = float(face_signal)
             c["pose_signal"] = float(pose_signal)
@@ -756,21 +618,7 @@ def select_keyframes(
             c["score_pre_mult"] = score_pre
             c["final_score"] = float(final_score)
 
-
-            # ---------- HARD FLOORS ----------
-            # A frame is only eligible if:
-            # - confidence is above MIN_FINAL_CONF
-            # - final_score is above MIN_FINAL_SCORE
-            if c["model_confidence"] < MIN_FINAL_CONF:
-                continue
-            if c["final_score"] < MIN_FINAL_SCORE:
-                continue
-
             scored.append(c)
-
-        if debug:
-            print(f"[SCORING] <<< Stage 5 done: kept={len(scored)} after hard floors "
-                  f"(MIN_CONF={MIN_FINAL_CONF}, MIN_SCORE={MIN_FINAL_SCORE})")
 
         if not scored:
             if debug:
@@ -783,107 +631,42 @@ def select_keyframes(
 
         all_candidates.extend(scored)
 
-    
-
     # =============================================================================
     # Stage 6: Save selected keyframes 
     # =============================================================================
-
+    
     if not all_candidates:
         print("[WARN] No candidates found. Prefilters too strict or model paths failing.")
         pd.DataFrame([]).to_csv(output_csv, index=False)
         return
 
-    print("\n" + "=" * 72)
-    print(f"[FINAL] >>> Global selection from {len(all_candidates)} candidates")
-    print(f"[FINAL] Selection mode: {'QUOTA-BASED' if USE_QUOTA_SELECTION else 'GLOBAL RANKING'}")
-    print("=" * 72)
-
-
-    # -------------------------------------------------------------------------
-    # Helper function for selecting final frames
-    # -------------------------------------------------------------------------
-    def select_final_frames(pool: List[dict], score_floor: float, max_frames: int) -> List[dict]:
-        """
-        Select frames from pool using global ranking:
-        1. Apply hard floors (confidence + score)
-        2. Sort by final_score descending
-        
-        Returns: list of selected candidates
-        """
-        # Step 1: Hard floors
-        eligible = [
-            c for c in pool
-            if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
-            and float(c.get("final_score", 0.0)) >= score_floor
-        ]
-        
-        if not eligible:
-            return []
-        
-        # Step 2: Sort by final_score (global ranking)
-        eligible_sorted = sorted(eligible, key=lambda x: x["final_score"], reverse=True)
-        
-        return eligible_sorted[:max_frames]
-
-    # -------------------------------------------------------------------------
-    # Segment-Quota-Based vs Global Ranking Selection
-    # -------------------------------------------------------------------------
-
-    if USE_QUOTA_SELECTION:
-        # QUOTA-BASED: Use segment quotas to ensure diversity
-        print("[FINAL] Using quota-based selection (ensures per-segment diversity)")
-        final_selection = _quota_select(all_candidates, top_n=top_n)
-        
-        # Apply hard filters (quota cannot override confidence/score)
-        before_filter = len(final_selection)
-        final_selection = [
-            c for c in final_selection
-            if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
-            and float(c.get("final_score", 0.0)) >= MIN_FINAL_SCORE
-        ]
-        
-        if before_filter > len(final_selection):
-            print(f"[FINAL] Hard floors filtered: {before_filter} -> {len(final_selection)}")
-        
-        # Fallback: try to fill remaining slots with relaxed score floor
-        if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
-            print(f"[FINAL] Quota selection: {len(final_selection)} / {top_n}")
-            print(f"[FINAL] Trying fallback with score floor {FALLBACK_MIN_FINAL_SCORE}")
-            
-            extra = sorted(
-                [
-                    c for c in all_candidates
-                    if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
-                    and float(c.get("final_score", 0.0)) >= FALLBACK_MIN_FINAL_SCORE
-                    and c not in final_selection
-                ],
-                key=lambda x: x["final_score"],
-                reverse=True
-            )
-            
-            for c in extra:
-                if len(final_selection) >= top_n:
-                    break
-                final_selection.append(c)
-
-    else:
-        # GLOBAL RANKING: Select best frames overall (no segment quotas)
-        print("[FINAL] Using global ranking (best frames win, segment mult already in score)")
-        
-        # Primary selection with strict score floor
-        final_selection = select_final_frames(all_candidates, MIN_FINAL_SCORE, top_n)
-        
-        # Fallback: if we didn't get enough frames, try relaxed score floor
-        if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
-            print(f"[FINAL] Primary selection: {len(final_selection)} / {top_n}")
-            print(f"[FINAL] Trying fallback with score floor {FALLBACK_MIN_FINAL_SCORE} (conf unchanged)")
-            
-            # Re-run selection with relaxed floor
-            final_selection = select_final_frames(all_candidates, FALLBACK_MIN_FINAL_SCORE, top_n)
+    print(f"\n[FINAL] >>> Selecting from {len(all_candidates)} candidates")
     
-    print(f"[FINAL] <<< Selected: {len(final_selection)} / {top_n}\n")
 
+    def select_final_frames(pool: List[dict], score_floor: float, max_frames: int) -> List[dict]:
+        eligible = sorted(
+            [c for c in pool
+             if float(c.get("model_confidence", 0.0)) >= MIN_FINAL_CONF
+             and float(c.get("final_score", 0.0)) >= score_floor],
+            key=lambda x: x["final_score"], reverse=True
+        )
+        selected, selected_indices = [], []
+        for c in eligible:
+            idx = extract_frame_index(c["path"])
+            if not any(abs(idx - ki) < TEMPORAL_WINDOW for ki in selected_indices):
+                selected.append(c)
+                selected_indices.append(idx)
+            if len(selected) >= max_frames:
+                break
+        return selected
+
+    final_selection = select_final_frames(all_candidates, MIN_FINAL_SCORE, top_n)
+
+    if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
+        print(f"[FINAL] Only {len(final_selection)}/{top_n} with strict floor, trying fallback ({FALLBACK_MIN_FINAL_SCORE})")
+        final_selection = select_final_frames(all_candidates, FALLBACK_MIN_FINAL_SCORE, top_n)
+
+    print(f"[FINAL] <<< Selected: {len(final_selection)} / {top_n}\n")
 
 
     # -----------------------------------------------------------------------------
@@ -971,11 +754,10 @@ def select_keyframes(
     print(f"  Sharpness (blurry frames):       {analytics['frames_filtered_sharpness']}")
     print(f"  Uniformity (flat frames):        {analytics['frames_filtered_uniformity']}")
     print(f"\nExtension filters:")
-    print(f"  Overlay:                         {analytics['frames_filtered_overlay']}")
     print(f"  Texture:                         {analytics['frames_filtered_texture']}")
     print(f"\nStage filters:")
     print(f"  Closeup ratio (pose):            {analytics['frames_filtered_closeup']}")
-    print(f"  Redundancy reduction (visual + temporal): {analytics['frames_dropped_redundancy']}")
+    print(f"  Redundancy reduction:            {analytics['frames_dropped_redundancy']}")
     print(f"  Logo detection:                  {analytics['frames_filtered_logo']}")
 
     print("\nCandidates by closeup type:")
@@ -1016,9 +798,6 @@ if __name__ == "__main__":
                         help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
     parser.add_argument("--redundancy_reduction", type=str, default="true",
                         help="Enable redundancy reduction: 'true' or 'false' (default: true)")
-    parser.add_argument("--fps", type=float, default=24.0,
-                        help="Extraction FPS — used to derive temporal_window (0.5s window). "
-                             "Must match the FPS passed to frame_extractor.py (default: 24.0)")
     args = parser.parse_args()
 
     enable_rr = args.redundancy_reduction.lower() not in ("false", "0", "no", "off")
@@ -1035,5 +814,4 @@ if __name__ == "__main__":
         debug=args.debug,
         video_id=args.video_id,
         redundancy_reduction=enable_rr,
-        fps=args.fps,
     )
