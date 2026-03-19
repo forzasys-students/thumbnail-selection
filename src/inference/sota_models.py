@@ -23,7 +23,7 @@ class SOTAModels:
         self,
         device: str = "cuda",
         yolo_pose_path: str = "models/yolo/yolo26m-pose.pt",
-        insightface_name: str = "buffalo_s",
+        insightface_name: str = "buffalo_l",
         debug: bool = False,
     ):
         self.debug = bool(debug)
