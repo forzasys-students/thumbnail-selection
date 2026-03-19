@@ -50,56 +50,6 @@ def reset_cluster_debug():
 # =============================================================================
 # CLIP EMBEDDER — loads once, reused across all segments
 # =============================================================================
-
-class _MobileNetEmbedder:
-    _instance: Optional["_MobileNetEmbedder"] = None
-
-    def __init__(self, device: str = "cuda"):
-       
-        self._Image = Image
-        self.device = device
-        m = models.mobilenet_v3_small(weights="IMAGENET1K_V1")
-        # Use features only (strip classifier)
-        self.model = nn.Sequential(*list(m.children())[:-1]).to(device).eval()
-        self.preprocess = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),
-        ])
-        print(f"[MobileNet] Ready on {device}")
-
-    @classmethod
-    def get(cls, device: str = "cuda") -> "_MobileNetEmbedder":
-        if cls._instance is None:
-            cls._instance = cls(device)
-        return cls._instance
-
-    def embed_batch(self, paths: list, batch_size: int = 64) -> dict:
-        from PIL import Image
-        embeddings = {}
-        for start in range(0, len(paths), batch_size):
-            batch_paths = paths[start:start + batch_size]
-            tensors, valid_paths = [], []
-            for p in batch_paths:
-                try:
-                    img = self._Image.open(p).convert("RGB")
-                    tensors.append(self.preprocess(img))
-                    valid_paths.append(p)
-                except Exception:
-                    embeddings[p] = np.zeros(576, dtype=np.float32)
-            if not tensors:
-                continue
-            batch_tensor = torch.stack(tensors).to(self.device)
-            with torch.no_grad():
-                feats = self.model(batch_tensor)
-                feats = feats.flatten(1)
-                feats = feats / (feats.norm(dim=-1, keepdim=True) + 1e-8)
-            for path, vec in zip(valid_paths, feats.cpu().numpy()):
-                embeddings[path] = vec
-        return embeddings
-
-
 class _CLIPEmbedder:
     """
     Lazy singleton wrapper around CLIP ViT-B/32.
@@ -131,7 +81,8 @@ class _CLIPEmbedder:
             )
         self.device = device
         print(f"[CLIP] Loading ViT-B/32 on {device}...")
-        self.model, self.preprocess = clip.load("RN50", device=device)
+        self.model, self.preprocess = clip.load("ViT-B/32", device=device)
+        #self.model, self.preprocess = clip.load("ViT-L/14", device=device)
         self.model.eval()
         print("[CLIP] Ready.")
 
@@ -177,6 +128,56 @@ class _CLIPEmbedder:
             for path, vec in zip(valid_paths, feats.cpu().numpy()):
                 embeddings[path] = vec
         return embeddings
+
+
+
+# =============================================================================
+# AESTHETIC SCORER — runs on top of existing CLIP embeddings, zero extra cost
+# =============================================================================
+
+class _AestheticScorer:
+    """
+    LAION aesthetic predictor MLP. Runs on CLIP ViT-B/32 embeddings (512-dim).
+    Since embeddings are already computed for clustering, scoring is free.
+    Downloads ~4MB weights on first use, cached by torch.hub.
+    """
+    _instance: Optional["_AestheticScorer"] = None
+
+    def __init__(self, device: str = "cuda"):
+        self.device = device
+        self.model = nn.Linear(512, 1).to(device).eval()
+        url = "https://github.com/LAION-AI/aesthetic-predictor/raw/main/sa_0_4_vit_b_32_linear.pth"
+        state = torch.hub.load_state_dict_from_url(url, map_location=device, progress=True)
+        self.model.load_state_dict(state)
+
+        print(f"[AestheticScorer] Ready on {device}")
+
+    @classmethod
+    def get(cls, device: str = "cuda") -> "_AestheticScorer":
+        if cls._instance is None:
+            cls._instance = cls(device)
+        return cls._instance
+
+    def score(self, embeddings: dict) -> dict:
+        """
+        Score all embeddings in one GPU pass.
+        embeddings: {path -> np.ndarray (512,)} — already L2-normalised CLIP vectors
+        Returns:    {path -> float} aesthetic score, normalised to [0, 1]
+        """
+        if not embeddings:
+            return {}
+        paths = list(embeddings.keys())
+        vecs = torch.tensor(
+            np.stack([embeddings[p] for p in paths]),
+            dtype=torch.float32
+        ).to(self.device)
+
+        with torch.no_grad():
+            raw = self.model(vecs).squeeze(-1).cpu().numpy()
+
+        # Raw scores are roughly in [1, 10] — normalise to [0, 1]
+        normalised = np.clip((raw - 1.0) / 9.0, 0.0, 1.0)
+        return {p: float(s) for p, s in zip(paths, normalised)}
 
 
 # =============================================================================
@@ -242,7 +243,7 @@ def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
 
 def select_from_cluster(
     cluster,
-    score_key="final_score",
+    score_key="aesthetic_score",
     top_k=1,
     cluster_id=None,
     stage="unknown"
@@ -313,17 +314,17 @@ def visual_clustering(
         max_hamming = int(64 * (1.0 - similarity_threshold))
 
     elif method == "clip":
-        # All frames in this group encoded in a single batched GPU pass
         paths = [c["path"] for c in candidates]
         embedder = _CLIPEmbedder.get(device=clip_device)
         features = embedder.embed_batch(paths, batch_size=clip_batch_size)
+
+        # Score aesthetics from the same embeddings — no extra forward pass
+        aesthetic_scores = _AestheticScorer.get(device=clip_device).score(features)
+        for c in candidates:
+            c["aesthetic_score"] = aesthetic_scores.get(c["path"], 0.0)
+
         if debug:
             print(f"[CLIP] Encoded {len(paths)} frames (batch_size={clip_batch_size})")
-
-    elif method == "mobilenet":
-        paths = [c["path"] for c in candidates]
-        embedder = _MobileNetEmbedder.get(device=clip_device)
-        features = embedder.embed_batch(paths, batch_size=clip_batch_size)
 
     else:
         raise ValueError(f"Unknown method: {method!r}. Choose: histogram | phash | clip")
@@ -372,7 +373,7 @@ def visual_clustering(
 def temporal_clustering(
     candidates: List[Dict],
     min_frame_gap: int = 24,
-    score_key: str = "proxy_score",
+    score_key: str = "aesthetic_score",
     top_k: int = 1,
     debug: bool = False,
 ) -> List[Dict]:
@@ -463,10 +464,10 @@ def temporal_clustering(
 
 def hybrid_clustering(
     candidates: List[Dict],
-    temporal_window: int = 10,
-    visual_threshold: float = 0.92,
-    visual_method: str = "histogram",
-    score_key: str = "final_score",
+    temporal_window: int = 12,
+    visual_threshold: float = 0.90,
+    visual_method: str = "clip",
+    score_key: str = "aesthetic_score",
     top_k: int = 1,
     clip_device: str = "cuda",
     clip_batch_size: int = 64,
@@ -524,10 +525,10 @@ def hybrid_clustering(
 def reduce_redundancy(
     candidates: List[Dict],
     method: str = "hybrid",
-    temporal_window: int = 48,
-    visual_threshold: float = 0.80,
-    visual_method: str = "mobilenet",
-    score_key: str = "final_score",
+    temporal_window: int = 12,
+    visual_threshold: float = 0.90,
+    visual_method: str = "clip",
+    score_key: str = "aesthetic_score",
     top_k: int = 1,
     clip_device: str = "cuda",
     clip_batch_size: int = 64,
