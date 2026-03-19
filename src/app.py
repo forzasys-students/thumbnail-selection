@@ -538,10 +538,10 @@ def get_video_metadata(keyframe_filename):
                 if matching_event:
                     break
 
-        # ── 5. Dev fallback ───────────────────────────────────────────────────
+        # ── 5. No match → return early with matched=False ────────────────────
         if not matching_event:
-            print(f"[WARN] No event matched video_id={video_id!r}. Returning first event as fallback.")
-            matching_event = events[0]
+            print(f"[INFO] No event matched video_id={video_id!r}. No metadata available.")
+            return jsonify({"success": True, "video_id": video_id, "matched": False, "metadata": None})
 
         # ── 6. Build and return metadata ──────────────────────────────────────
         game          = matching_event.get('playlist', {}).get('game', {})
@@ -574,7 +574,7 @@ def get_video_metadata(keyframe_filename):
             "description":   matching_event.get('playlist', {}).get('description',    ''),
         }
 
-        return jsonify({"success": True, "video_id": video_id, "metadata": metadata})
+        return jsonify({"success": True, "video_id": video_id, "matched": True, "metadata": metadata})
 
     except Exception as e:
         print(f"[ERROR] get_video_metadata: {e}")
