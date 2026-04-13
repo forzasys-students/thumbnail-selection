@@ -2,6 +2,26 @@
 
 export PYTHONIOENCODING=utf-8
 
+# ── Pre-download all required models on first run, then go offline ────────────
+echo "[INFO] Checking model cache..."
+python - <<'EOF'
+import sys
+try:
+    # This triggers the timm/HuggingFace download if not cached
+    import timm
+    timm.create_model('resnet50.a1_in1k', pretrained=True)
+    print("[INFO] Model cache OK.")
+except Exception as e:
+    print(f"[WARN] Model pre-check failed: {e}", file=sys.stderr)
+EOF
+
+# Now that models are cached, block all further network calls to HuggingFace.
+# This prevents the 5-retry delay on every run.
+export HF_HUB_OFFLINE=1
+# ─────────────────────────────────────────────────────────────────────────────
+
+PIPELINE_START=$SECONDS
+
 DEFAULT_VIDEO_PATH="../goalclip.mp4"
 DEFAULT_MODEL="resnet18"
 
@@ -58,7 +78,11 @@ if [ -d "$FRAMES_DIR" ]; then
     mkdir -p "$FRAMES_DIR"
 fi
 
+# =============================================================================
+# STEP 1 — Frame extraction
+# =============================================================================
 echo "[STEP 1] Extracting frames..."
+T1=$SECONDS
 python src/utils/frame_extractor.py \
     --input_path "$VIDEO_PATH" \
     --output_dir "$FRAMES_DIR" \
@@ -66,8 +90,13 @@ python src/utils/frame_extractor.py \
     --video_id "$VIDEO_ID" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Frame extraction failed"; exit 1; fi
+echo "[STEP 1] Done in $((SECONDS - T1))s"
 
+# =============================================================================
+# STEP 2 — Model inference
+# =============================================================================
 echo "[STEP 2] Running inference ($MODEL_NAME)..."
+T2=$SECONDS
 python src/inference/inference_model.py \
     --frames_root "$FRAMES_DIR" \
     --weights "$WEIGHTS_PATH" \
@@ -75,8 +104,13 @@ python src/inference/inference_model.py \
     --output_csv "$PRED_CSV" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Inference failed"; exit 1; fi
+echo "[STEP 2] Done in $((SECONDS - T2))s"
 
+# =============================================================================
+# STEP 3 — Segment extraction
+# =============================================================================
 echo "[STEP 3] Extracting segments..."
+T3=$SECONDS
 python src/inference/extract_priority_segments.py \
     --pred_csv "$PRED_CSV" \
     --min_length 5 \
@@ -85,8 +119,13 @@ python src/inference/extract_priority_segments.py \
     --output_csv "$SEG_CSV" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Segment extraction failed"; exit 1; fi
+echo "[STEP 3] Done in $((SECONDS - T3))s"
 
+# =============================================================================
+# STEP 4 — Keyframe selection
+# =============================================================================
 echo "[STEP 4] Selecting keyframes..."
+T4=$SECONDS
 python src/inference/keyframe_selector.py \
     --pred_csv "$PRED_CSV" \
     --seg_csv "$SEG_CSV" \
@@ -96,5 +135,20 @@ python src/inference/keyframe_selector.py \
     --redundancy_reduction "$REDUNDANCY_ARG" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Keyframe selection failed"; exit 1; fi
+echo "[STEP 4] Done in $((SECONDS - T4))s"
+
+# =============================================================================
+# TIMING SUMMARY
+# =============================================================================
+echo ""
+echo "================================================"
+echo "PIPELINE TIMING SUMMARY"
+echo "================================================"
+echo "  Step 1 - Frame extraction:    $((T2 - T1))s"
+echo "  Step 2 - Model inference:     $((T3 - T2))s"
+echo "  Step 3 - Segment extraction:  $((T4 - T3))s"
+echo "  Step 4 - Keyframe selection:  $((SECONDS - T4))s"
+echo "  Total:                        $((SECONDS - PIPELINE_START))s"
+echo "================================================"
 
 echo "[DONE] Pipeline completed successfully."
