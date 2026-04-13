@@ -5,15 +5,24 @@ import threading
 import queue
 import json
 import csv
+import shutil
 from werkzeug.utils import secure_filename
 import time
 import requests
 from datetime import datetime, timedelta
+import shutil  
 
 # Add near the top with other config
-API = "https://api.fotbollplay.se/allsvenskan/event?from_date=2025-01-01T00:00:00.000Z&to_date=2026-01-01T00:00:00.000Z&min_rating=1&tags=%7B%22action%22%3A%22goal%22%7D&count=10&from=0"
-METADATA_CACHE = {}  # Simple in-memory cache
-CACHE_DURATION = 300  # 5 minutes
+API = "https://api.fotbollplay.se/allsvenskan/event"
+
+# video_asset_id → event index (built once, refreshed every INDEX_TTL seconds)
+VIDEO_INDEX: dict = {}
+INDEX_LAST_UPDATED: float | None = None
+INDEX_TTL = 300  # seconds (5 min)
+
+# Keep legacy cache dict for the proxy endpoint
+METADATA_CACHE = {}
+CACHE_DURATION = 300
 
 
 # SAM3 client imports
@@ -44,6 +53,40 @@ os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
 # Queue for progress updates
 progress_queue = queue.Queue()
 current_status = {"stage": "", "progress": 0, "message": ""}
+
+
+def cleanup_data_folder():
+    """
+    Wipe all previous uploads and inference output before starting a new run.
+
+    - Deletes every video file sitting directly inside  data/
+    - Removes data/inference_output/ entirely (frames, predictions,
+      segments, keyframes, masks, thumbnails)
+    - Recreates the empty masks/ and thumbnails/ dirs so Flask routes
+      and the compositor still work immediately after cleanup.
+    """
+    data_dir      = os.path.join(BASE_DIR, "data")
+    inference_dir = os.path.join(data_dir, "inference_output")
+
+    # 1. Remove old uploaded video files from data/ (files only, not subdirs)
+    if os.path.isdir(data_dir):
+        for entry in os.scandir(data_dir):
+            if entry.is_file():
+                try:
+                    os.remove(entry.path)
+                    print(f"[Cleanup] Removed old upload: {entry.name}")
+                except Exception as exc:
+                    print(f"[Cleanup] Could not remove {entry.name}: {exc}")
+
+    # 2. Remove the entire inference_output tree
+    if os.path.isdir(inference_dir):
+        shutil.rmtree(inference_dir, ignore_errors=True)
+        print("[Cleanup] Removed inference_output/")
+
+    # 3. Recreate the dirs that Flask expects to exist straight away
+    os.makedirs(MASKS_FOLDER,      exist_ok=True)
+    os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
+    print("[Cleanup] Output directories recreated — ready for new run.")
 
 
 def run_inference(model, video_path, fps=5, redundancy_reduction=True):
@@ -151,15 +194,38 @@ def run_inference(model, video_path, fps=5, redundancy_reduction=True):
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    global current_status
+
+    if request.method == 'GET':
+        # Reset stale state from previous run
+        current_status = {"stage": "idle", "progress": 0, "message": ""}
+        while not progress_queue.empty():
+            try:
+                progress_queue.get_nowait()
+            except Exception:
+                break
+        return render_template('index.html')
+
     if request.method == 'POST':
         model = request.form['model']
         video_file = request.files['video']
 
         if video_file:
             filename = secure_filename(video_file.filename)
-
             upload_dir = os.path.join(BASE_DIR, "data")
             os.makedirs(upload_dir, exist_ok=True)
+
+            # Reset pipeline state and drain queue before new run
+            current_status = {"stage": "Starting", "progress": 0, "message": "Initializing pipeline..."}
+            while not progress_queue.empty():
+                try:
+                    progress_queue.get_nowait()
+                except Exception:
+                    break
+
+            # Clean previous run's files
+            print(f"[Upload] New video received: {filename} — cleaning previous data...")
+            cleanup_data_folder()
 
             video_path = os.path.join(upload_dir, filename)
             video_file.save(video_path)
@@ -185,25 +251,20 @@ def progress():
     """Progress page with real-time updates"""
     return render_template('progress.html')
 
-
 @app.route('/stream')
 def stream():
-    """Server-Sent Events stream for progress updates"""
     def generate():
-        last_status = {}
         while True:
             try:
                 status = progress_queue.get(timeout=0.5)
                 yield f"data: {json.dumps(status)}\n\n"
-                last_status = status
-                
                 if status.get('stage') in ['Complete', 'Error']:
                     break
             except queue.Empty:
-                # Send keepalive with current status
-                if current_status:
+                stage = current_status.get('stage', 'idle')
+                if stage not in ('Complete', 'Error', 'idle', ''):
                     yield f"data: {json.dumps(current_status)}\n\n"
-    
+
     return Response(generate(), mimetype='text/event-stream')
 
 @app.route('/results')
@@ -451,130 +512,88 @@ def get_fotbollplay_events():
 @app.route('/api/video-metadata/<keyframe_filename>')
 def get_video_metadata(keyframe_filename):
     """
-    Get metadata for a specific keyframe by matching video_id to a FotbollPlay event.
+    Get metadata for a specific keyframe by matching video_asset_id to a
+    FotbollPlay event via a pre-built index.
 
-    video_id extraction (in priority order):
-      1. From keyframe filename: video_17534_rank01_... → "17534"
-      2. From keyframes.csv saved_path column (handles mixed-slash Windows paths)
+    video_id extraction (priority order):
+      1. Filename pattern:  video_17534_rank01_… → "17534"
+      2. keyframes.csv saved_path column (handles mixed Windows/POSIX paths)
 
-    Event matching checks ALL of these fields because the FotbollPlay schema varies:
-      - event.id
-      - event.playlist.video_asset_id
-      - event.playlist.video_url  (contains /17534:start:end/)
-      - event.playlist.events[].video_asset_id
-      - event.playlist.events[].id
+    Matching uses the index built by build_video_index():
+        video_asset_id → event (O(1), full dataset, cached)
     """
     try:
-        # ── 1. Extract video_id from filename ────────────────────────────────
+        # ── 1. Extract video_id ───────────────────────────────────────────────
         video_id = None
-
-        # Normalise mixed Windows/POSIX slashes, then grab the bare filename
         bare = keyframe_filename.replace('\\', '/').split('/')[-1]
 
         if 'video_' in bare:
             try:
                 video_id = bare.split('video_')[1].split('_')[0]
             except IndexError:
-                video_id = None
+                pass
 
-        # ── 2. Fall back to keyframes.csv if filename parsing missed it ───────
         if not video_id:
             video_id = _lookup_video_id_from_csv(bare)
 
         print(f"[metadata] keyframe={bare}  resolved video_id={video_id!r}")
 
-        # ── 3. Fetch events (cached) ─────────────────────────────────────────
-        events_response = get_fotbollplay_events()
-        events_data = events_response.get_json()
+        if not video_id:
+            return jsonify({"success": False, "error": "Could not extract video_id"}), 400
 
-        if not events_data:
-            return jsonify({"success": False, "error": "No events data from FotbollPlay"}), 502
+        # ── 2. O(1) index lookup ──────────────────────────────────────────────
+        index = get_video_index()
+        matching_events = index.get(str(video_id), [])
 
-        #  Footbollplay may return a list at top level OR wrapped in "events" key
-        if isinstance(events_data, list):
-            events = events_data
-        else:
-            events = events_data.get('events', [])
+        if not matching_events:
+            print(f"[INFO] video_id={video_id!r} not found in index.")
+            return jsonify({
+                "success": True,
+                "video_id": video_id,
+                "matched": False,
+                "metadata": None
+            })
 
-        if not events:
-            return jsonify({"success": False, "error": "Events list is empty"}), 404
+        # Take the first match (index was built in chronological API order)
+        event = matching_events[0]
 
-        # ── 4. Match event ────────────────────────────────────────────────────
-        matching_event = None
-
-        if video_id:
-            vid = str(video_id)
-            for event in events:
-                # Check top-level event id
-                if str(event.get('id', '')) == vid:
-                    matching_event = event
-                    break
-
-                playlist = event.get('playlist', {})
-
-                # Check playlist.video_asset_id
-                if str(playlist.get('video_asset_id', '')) == vid:
-                    matching_event = event
-                    break
-
-                # Check playlist.video_url for FotbollPlay m3u8 pattern /17534:start:end/
-                video_url = playlist.get('video_url', '')
-                if video_url:
-                    import re as _re
-                    m = _re.search(r'/(\d+):\d+:\d+/', video_url)
-                    if m and m.group(1) == vid:
-                        matching_event = event
-                        break
-
-                # Check nested playlist.events[]
-                for pe in playlist.get('events', []):
-                    if str(pe.get('video_asset_id', '')) == vid:
-                        matching_event = event
-                        break
-                    if str(pe.get('id', '')) == vid:
-                        matching_event = event
-                        break
-
-                if matching_event:
-                    break
-
-        # ── 5. No match → return early with matched=False ────────────────────
-        if not matching_event:
-            print(f"[INFO] No event matched video_id={video_id!r}. No metadata available.")
-            return jsonify({"success": True, "video_id": video_id, "matched": False, "metadata": None})
-
-        # ── 6. Build and return metadata ──────────────────────────────────────
-        game          = matching_event.get('playlist', {}).get('game', {})
-        home_team     = game.get('home_team',     {})
+        # ── 3. Build rich metadata (same fields as before) ────────────────────
+        game          = event.get('playlist', {}).get('game', {})
+        home_team     = game.get('home_team', {})
         visiting_team = game.get('visiting_team', {})
-        tag           = matching_event.get('tag', {})
+        tag           = event.get('tag', {})
 
         metadata = {
-            "score":          matching_event.get('score', '0-0'),
-            "game_time":      format_game_time(matching_event.get('game_time', 0)),
-            "game_phase":     matching_event.get('game_phase', ''),
-            "event_type":     tag.get('action', 'highlight'),
-            "scorer":         tag.get('player_name') or tag.get('scorer') or '',
+            "score":      event.get('score', '0-0'),
+            "game_time":  format_game_time(event.get('game_time', 0)),
+            "game_phase": event.get('game_phase', ''),
+            "event_type": tag.get('action', 'highlight'),
+            "scorer":     tag.get('player_name') or tag.get('scorer') or '',
 
-            "home_team":          home_team.get('name', ''),
-            "home_team_short":    home_team.get('short_name', ''),
-            "home_team_logo":     home_team.get('logo_url', ''),
+            "home_team":           home_team.get('name', ''),
+            "home_team_short":     home_team.get('short_name', ''),
+            "home_team_logo":      home_team.get('logo_url', ''),
 
-            "visiting_team":      visiting_team.get('name', ''),
-            "visiting_team_short":visiting_team.get('short_name', ''),
-            "visiting_team_logo": visiting_team.get('logo_url', ''),
+            "visiting_team":       visiting_team.get('name', ''),
+            "visiting_team_short": visiting_team.get('short_name', ''),
+            "visiting_team_logo":  visiting_team.get('logo_url', ''),
 
-            "stadium":       game.get('stadium_name',    ''),
-            "tournament":    game.get('tournament_name', ''),
-            "date":          game.get('date',            ''),
-            "attendance":    game.get('attendance'),
+            "stadium":    game.get('stadium_name', ''),
+            "tournament": game.get('tournament_name', ''),
+            "date":       game.get('date', ''),
+            "attendance": game.get('attendance'),
 
-            "video_url":     matching_event.get('playlist', {}).get('video_url',      ''),
-            "thumbnail_url": matching_event.get('playlist', {}).get('thumbnail_url',  ''),
-            "description":   matching_event.get('playlist', {}).get('description',    ''),
+            "video_url":     event.get('playlist', {}).get('video_url', ''),
+            "thumbnail_url": event.get('playlist', {}).get('thumbnail_url', ''),
+            "description":   event.get('playlist', {}).get('description', ''),
         }
 
-        return jsonify({"success": True, "video_id": video_id, "matched": True, "metadata": metadata})
+        return jsonify({
+            "success": True,
+            "video_id": video_id,
+            "matched": True,
+            "metadata": metadata
+        })
 
     except Exception as e:
         print(f"[ERROR] get_video_metadata: {e}")
@@ -599,6 +618,110 @@ def _lookup_video_id_from_csv(bare_filename: str):
     except Exception as e:
         print(f"[WARN] CSV lookup failed: {e}")
     return None
+
+
+def _fetch_goal_events_for_range(from_date: str, to_date: str, label: str) -> list:
+    """
+    Fetch all goal events for a single date range (paginated).
+    Runs in its own thread so two seasons can be fetched in parallel.
+    """
+    events = []
+    offset = 0
+    page_size = 100  # max out page size to minimise round-trips
+
+    while True:
+        url = (
+            "https://api.fotbollplay.se/allsvenskan/event?"
+            f"from_date={from_date}&"
+            f"to_date={to_date}&"
+            "min_rating=1&"
+            "tags=%7B%22action%22%3A%22goal%22%7D&"
+            f"count={page_size}&from={offset}"
+        )
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:
+            print(f"[Index:{label}] Fetch error at offset={offset}: {exc}")
+            break
+
+        page = data.get("events", []) if isinstance(data, dict) else data
+        if not page:
+            break
+
+        events.extend(page)
+        print(f"[Index:{label}] {len(events)} events so far…")
+
+        if len(page) < page_size:
+            break
+
+        offset += page_size
+
+    print(f"[Index:{label}] Done — {len(events)} events.")
+    return events
+
+
+def build_video_index():
+    """
+    Fetch goal events for 2024 and 2025 seasons in parallel, then build:
+        video_asset_id (str) → list[event]
+
+    Using tags=goal keeps the dataset small (~700 events/season vs 7000+).
+    Two threads run simultaneously so total time ≈ one season's fetch time.
+    """
+    global VIDEO_INDEX, INDEX_LAST_UPDATED
+
+    print("[Index] Building video index (parallel fetch, goals only)…")
+
+    results: dict[str, list] = {"2024": [], "2025": []}
+
+    def fetch_2024():
+        results["2024"] = _fetch_goal_events_for_range(
+            "2024-01-01T00:00:00.000Z", "2025-01-01T00:00:00.000Z", "2024"
+        )
+
+    def fetch_2025():
+        results["2025"] = _fetch_goal_events_for_range(
+            "2025-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z", "2025"
+        )
+
+    t1 = threading.Thread(target=fetch_2024)
+    t2 = threading.Thread(target=fetch_2025)
+    t1.start(); t2.start()
+    t1.join();  t2.join()
+
+    all_events = results["2024"] + results["2025"]
+
+    # Build index: video_asset_id → list of parent events
+    index: dict = {}
+    for event in all_events:
+        for pe in event.get("playlist", {}).get("events", []):
+            vid = pe.get("video_asset_id")
+            if vid:
+                index.setdefault(str(vid), []).append(event)
+
+    VIDEO_INDEX = index
+    INDEX_LAST_UPDATED = time.time()
+    print(
+        f"[Index] Done. Indexed {len(VIDEO_INDEX)} unique video_asset_ids "
+        f"across {len(all_events)} total events "
+        f"(2024: {len(results['2024'])}, 2025: {len(results['2025'])})."
+    )
+
+
+def get_video_index() -> dict:
+    """Return the cached index, rebuilding it if stale or empty."""
+    global VIDEO_INDEX, INDEX_LAST_UPDATED
+
+    if (
+        not VIDEO_INDEX
+        or INDEX_LAST_UPDATED is None
+        or time.time() - INDEX_LAST_UPDATED > INDEX_TTL
+    ):
+        build_video_index()
+
+    return VIDEO_INDEX
 
 
 def format_game_time(seconds):

@@ -19,8 +19,8 @@ function updateFps(value) {
     if (badge) {
         badge.textContent = `${value} fps`;
         badge.className = 'setting-badge';
-        if (value > 12) badge.classList.add('hot');
-        else if (value > 5) badge.classList.add('warn');
+        if (value > 16) badge.classList.add('hot');
+        else if (value > 8) badge.classList.add('warn');
     }
 
     // Update the CSS gradient so the filled portion tracks the thumb

@@ -17,6 +17,8 @@ from insightface.app import FaceAnalysis
 from ultralytics import YOLO
 import pyiqa
 
+import os
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 class SOTAModels:
     def __init__(
@@ -46,7 +48,7 @@ class SOTAModels:
 
         self.face_app = FaceAnalysis(name=insightface_name, providers=providers)
         ctx_id = 0 if self.device.startswith("cuda") else -1
-        # The detector will resize input images to this size for detection; larger sizes may improve small face detection but increase latency. 640 is a good balance for broadcast footage where faces are often small but we want to keep inference fast. 
+        # The detector will resize input images to this size for detection; larger sizes may improve small face detection but increase latency.  
         self.face_app.prepare(ctx_id=ctx_id, det_size=(256, 256)) # reduce to (256,256) for faster but less accurate detection. 
 
         if self.debug:

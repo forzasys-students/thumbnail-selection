@@ -48,8 +48,8 @@ from preprocess import (
 
 # Segment-specific multiplier: boosts or penalizes final score by segment type.
 SEGMENT_SCORE_MULT = {
-    "P1_player_referee": 1.10,   # Highest - action/emotion shots (best thumbnails)
-    "P2_corner": 1.00,           # High - set pieces, tactical moments
+    "P1_player_referee": 1.20,   # Highest - action/emotion shots (best thumbnails)
+    "P2_corner": 1.075,           # High - set pieces, tactical moments
     "P3_side_staff": 1.05,       # Medium - coach reactions, bench celebrations
     "P4_behind_goal": 1.00,      # Baseline - goalkeeper shots, different angle
 }
@@ -58,31 +58,31 @@ SEGMENT_SCORE_MULT = {
 QUALITY_THRESHOLDS = {
     "P1_player_referee": {
         "min_luminance": 50.0,       # reject dark frames
-        "min_sharpness": 20.0,       # reject blurry frames (gradient magnitude)
+        "min_sharpness": 15.0,       # reject blurry frames (gradient magnitude)
         "max_uniformity": 0.70,       # reject flat/uniform frames
         "min_texture": 5.0,          # edge density check
-        "min_closeup_ratio": 0.05,   # pose-based closeup proxy (tune this based on your pose model's output)
+        "min_closeup_ratio": 0.15,   # pose-based closeup proxy (tune this based on your pose model's output)
     },
     "P2_corner": {
         "min_luminance": 50.0,       
-        "min_sharpness": 20.0,       
+        "min_sharpness": 15.0,       
         "max_uniformity": 0.70,       
         "min_texture": 5.0,
-        "min_closeup_ratio": 0.05,    
+        "min_closeup_ratio": 0.10,    
     },
     "P3_side_staff": {
         "min_luminance": 50.0,
-        "min_sharpness": 20.0,
+        "min_sharpness": 15.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
-        "min_closeup_ratio": 0.05,   
+        "min_closeup_ratio": 0.15,   
     },
     "P4_behind_goal": {
         "min_luminance": 50.0,
-        "min_sharpness": 20.0,
+        "min_sharpness": 15.0,
         "max_uniformity": 0.70,
         "min_texture": 4.0,
-        "min_closeup_ratio": 0.05,    
+        "min_closeup_ratio": 0.10,    
     },
 }
 
@@ -111,8 +111,8 @@ WEIGHTS = normalize_weights({
     #"content": 0.60,        # face/celebration/closeup (depends on keyframe_priority)
     "iqa": 0.35,             # Image quality assessment (TOPIQ)
     "face": 0.25,            # face quality signal
-    "emotion": 0.20,         # emotion signal
-    "pose": 0.20,            # pose signal
+    "emotion": 0.15,         # emotion signal
+    "pose": 0.15,            # pose signal
 })
 
 
@@ -318,7 +318,7 @@ def select_keyframes(
             pre_items = reduce_redundancy(
                 pre_items,
                 method="hybrid",
-                visual_threshold=0.90,
+                visual_threshold=0.92,
                 visual_method="clip",
                 temporal_window=TEMPORAL_WINDOW,
                 score_key="aesthetic_score",   

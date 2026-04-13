@@ -1,13 +1,3 @@
-/**
- * Enhanced Thumbnail Editor with Graphics, Metadata & Templates
- * 
- * NEW FEATURES:
- * - Shape elements (rectangles, badges)
- * - Multiple font families
- * - Logo/icon upload and placement
- * - Metadata integration (score, player names, teams)
- */
-
 class ThumbnailEditor {
     constructor(imageFilename, canvasId = 'te-canvas') {
         this.imageFilename = imageFilename;
@@ -39,6 +29,7 @@ class ThumbnailEditor {
         this.isSegmenting = false;
         this._blurCache = null;
         this._maskFilename = null;
+        this._idCounter = 1; // unique ID for every element;
 
         // Event listeners
         this.canvas.addEventListener('mousedown', this._onMouseDown.bind(this));
@@ -51,13 +42,11 @@ class ThumbnailEditor {
     // Init
     // =========================================================================
     async init(metadata = null) {
-        this.metadata = metadata;
+        this.metadata = null; 
         try {
             this.originalImage = await this._loadImg(`/keyframes/${this.imageFilename}`);
             this.canvas.width = this.originalImage.naturalWidth;
             this.canvas.height = this.originalImage.naturalHeight;
-            // Wait for custom web fonts (Bebas Neue, Montserrat, Oswald) before painting
-            await document.fonts.ready;
             this._render();
         } catch (e) {
             this.showError('Failed to load image: ' + e.message);
@@ -114,6 +103,31 @@ class ThumbnailEditor {
         }
     }
 
+    async _ensureMetadataLoaded() {
+        if (this.metadata) return;
+
+        this.showStatus('Loading metadata…');
+
+        try {
+            const res = await fetch(`/api/video-metadata/${encodeURIComponent(this.imageFilename)}`);
+            const data = await res.json();
+
+            if (!data.success || !data.metadata) {
+                throw new Error('No metadata found for this frame');
+            }
+
+            this.metadata = data.metadata;
+
+            this.showStatus('✓ Metadata loaded');
+
+            this._updateMetadataUI();
+
+        } catch (e) {
+            this.metadata = null; // important: reset
+            this.showError('Metadata load failed: ' + e.message);
+        }
+    }
+    
     // =========================================================================
     // Render Pipeline
     // =========================================================================
@@ -175,11 +189,9 @@ class ThumbnailEditor {
     // ── Text ──────────────────────────────────────────────────────────────────
     _drawText(ctx, el) {
         const { content, x, y, fontSize, color, strokeColor, strokeWidth, fontFamily, fontWeight } = el;
-        // Quote the family name so multi-word names ("Arial Black", "Bebas Neue" …) work
-        const family = fontFamily || 'Impact';
-        ctx.font = `${fontWeight || 'bold'} ${fontSize}px "${family}", sans-serif`;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
+        ctx.font = `${fontWeight || 'bold'} ${fontSize}px ${fontFamily || 'Impact'}, Arial Black, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
 
         if (strokeWidth > 0) {
             ctx.lineJoin = 'round';
@@ -205,10 +217,14 @@ class ThumbnailEditor {
             ctx.closePath();
         }
 
+        ctx.save(); 
         if (fillColor) {
+            ctx.globalAlpha = el.opacity ?? 1.0;   
             ctx.fillStyle = fillColor;
             ctx.fill();
         }
+        ctx.restore(); 
+
         if (strokeWidth > 0 && strokeColor) {
             ctx.strokeStyle = strokeColor;
             ctx.lineWidth = strokeWidth;
@@ -272,7 +288,7 @@ class ThumbnailEditor {
 
         let x, y, w, h;
         if (el.type === 'text') {
-            ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px "${el.fontFamily || 'Impact'}", sans-serif`;
+            ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
             w = ctx.measureText(el.content).width;
             h = el.fontSize * 1.2;
             x = el.x;
@@ -296,17 +312,41 @@ class ThumbnailEditor {
         ctx.setLineDash([]);
     }
 
+    _updateMetadataUI() {
+    const metaPanel = document.getElementById('te-meta-panel');
+    if (!metaPanel || !this.metadata) return;
+
+    const m = this.metadata;
+
+    metaPanel.classList.remove('hidden');
+
+    document.getElementById('te-meta-home').textContent =
+        m.home_team_short || m.home_team || '—';
+
+    document.getElementById('te-meta-away').textContent =
+        m.visiting_team_short || m.visiting_team || '—';
+
+    document.getElementById('te-meta-score').textContent =
+        m.score || '—';
+
+    document.getElementById('te-meta-time').textContent =
+        m.game_time ? `⏱ ${m.game_time}` : '';
+
+    document.getElementById('te-meta-event').textContent =
+        m.event_type ? `· ${m.event_type}` : '';
+}
+
     // =========================================================================
     // Element Management
     // =========================================================================
     addText(content = 'TEXT', x = 80, y = 80, opts = {}) {
         const el = {
-            id: Date.now(),
+            id: ++this._idCounter,
             type: 'text',
             content,
             x,
             y,
-            fontSize: opts.fontSize || 140,
+            fontSize: opts.fontSize || 85,
             color: opts.color || '#ffffff',
             strokeColor: opts.strokeColor || '#000000',
             strokeWidth: opts.strokeWidth || 8,
@@ -323,13 +363,14 @@ class ThumbnailEditor {
 
     addRect(x = 50, y = 50, opts = {}) {
         const el = {
-            id: Date.now(),
+            id: ++this._idCounter,
             type: 'rect',
             x,
             y,
-            width: opts.width || 200,
+            width: opts.width || 410,
             height: opts.height || 100,
-            fillColor: opts.fillColor || '#1a73e8',
+            fillColor: opts.fillColor || '#0a1628',
+            opacity: opts.opacity ?? 0.85, 
             strokeColor: opts.strokeColor || null,
             strokeWidth: opts.strokeWidth || 0,
             cornerRadius: opts.cornerRadius || 0,
@@ -348,7 +389,7 @@ class ThumbnailEditor {
         }
 
         const el = {
-            id: Date.now(),
+            id: ++this._idCounter,
             type: 'logo',
             imageUrl,
             x,
@@ -364,117 +405,230 @@ class ThumbnailEditor {
         return el.id;
     }
 
-    // ── Add both team logos from metadata ─────────────────────────────────────
+    // ── Sample the dominant identity colour from a team logo ──────────────────
+    // Strategy: convert every opaque pixel to HSL, keep only the most saturated
+    // ones (these are the vivid team colours, not white/black/grey), then average
+    // their RGB.  Falls back to navy if the logo is monochrome or too small.
+    _sampleLogoColor(imageEl) {
+        try {
+            const SIZE = 64;
+            const off = document.createElement('canvas');
+            off.width = SIZE; off.height = SIZE;
+            const ctx = off.getContext('2d');
+            ctx.drawImage(imageEl, 0, 0, SIZE, SIZE);
+            const px = ctx.getImageData(0, 0, SIZE, SIZE).data;
+
+            // Collect every opaque pixel as [r, g, b, saturation]
+            const colorful = [];
+            for (let i = 0; i < px.length; i += 4) {
+                const a = px[i + 3];
+                if (a < 100) continue; // skip transparent / semi-transparent
+
+                const r = px[i] / 255;
+                const g = px[i + 1] / 255;
+                const b = px[i + 2] / 255;
+
+                const max = Math.max(r, g, b);
+                const min = Math.min(r, g, b);
+                const lightness = (max + min) / 2;
+                const delta = max - min;
+
+                // Skip near-white (lightness > 0.85) and near-black (lightness < 0.12)
+                if (lightness > 0.85 || lightness < 0.12) continue;
+
+                // HSL saturation
+                const sat = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
+
+                // Only keep pixels with meaningful saturation (not grey)
+                if (sat < 0.25) continue;
+
+                colorful.push({ r: px[i], g: px[i + 1], b: px[i + 2], sat });
+            }
+
+            if (colorful.length < 10) {
+                // Logo is mostly monochrome (e.g. black/white badge) — fall back to navy
+                return '#0a1628';
+            }
+
+            // Sort by saturation descending, take the top 30% most vivid pixels
+            colorful.sort((a, b) => b.sat - a.sat);
+            const top = colorful.slice(0, Math.max(10, Math.floor(colorful.length * 0.3)));
+
+            // Average the vivid pixels
+            const rAvg = Math.round(top.reduce((s, c) => s + c.r, 0) / top.length);
+            const gAvg = Math.round(top.reduce((s, c) => s + c.g, 0) / top.length);
+            const bAvg = Math.round(top.reduce((s, c) => s + c.b, 0) / top.length);
+
+            // Darken by ~40% so it reads as a background without losing the hue
+            const r = Math.round(rAvg * 0.6);
+            const g = Math.round(gAvg * 0.6);
+            const b = Math.round(bAvg * 0.6);
+
+            return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+        } catch {
+            return '#0a1628';
+        }
+    }
+
+    // ── Add both team logos (TV2 style — side by side at bottom) ──────────────
     async addTeamLogos() {
+        await this._ensureMetadataLoaded();
+
         if (!this.metadata) {
             this.showError('No metadata loaded for this keyframe');
             return;
         }
         const { home_team_logo, visiting_team_logo, home_team_short, visiting_team_short } = this.metadata;
         const w = this.canvas.width;
+        const h = this.canvas.height;
 
         if (!home_team_logo && !visiting_team_logo) {
             this.showError('No team logos found in metadata');
             return;
         }
 
-        const SIZE = Math.round(w * 0.12);   // ~12% of canvas width
-        const PAD  = Math.round(w * 0.03);
+        // ── Layout constants (shared with addScore) ────────────────────────
+        const LOGO_SIZE = 200;
+        const PAD       = Math.round(w * 0.03);
+        const BOTTOM_Y  = h - PAD - LOGO_SIZE;
+        // ───────────────────────────────────────────────────────────────────
 
+        // Home team — bottom-left: navy backing rect + logo on top
         if (home_team_logo) {
+            this.addRect(PAD, BOTTOM_Y, {
+                width: LOGO_SIZE + 30, height: LOGO_SIZE + 30,
+                fillColor: '#0a1628',
+                strokeColor: null, strokeWidth: 0,
+                cornerRadius: 0,
+                layer: 'foreground'
+            });
             this.showStatus(`Loading ${home_team_short || 'home'} logo…`);
-            await this.addLogo(home_team_logo, PAD, PAD, {
-                width: SIZE, height: SIZE, layer: 'foreground'
+            await this.addLogo(home_team_logo, PAD + 15, BOTTOM_Y + 15, {
+                width: LOGO_SIZE, height: LOGO_SIZE, layer: 'foreground'
             });
         }
+
+        // Away team — bottom-right: navy backing rect + logo on top
         if (visiting_team_logo) {
+            const awayX = w - PAD - (LOGO_SIZE + 30);
+            this.addRect(awayX, BOTTOM_Y, {
+                width: LOGO_SIZE + 30, height: LOGO_SIZE + 30,
+                fillColor: '#0a1628',
+                strokeColor: null, strokeWidth: 0,
+                cornerRadius: 0,
+                layer: 'foreground'
+            });
             this.showStatus(`Loading ${visiting_team_short || 'away'} logo…`);
-            await this.addLogo(visiting_team_logo, w - SIZE - PAD, PAD, {
-                width: SIZE, height: SIZE, layer: 'foreground'
+            await this.addLogo(visiting_team_logo, awayX + 15, BOTTOM_Y + 15, {
+                width: LOGO_SIZE, height: LOGO_SIZE, layer: 'foreground'
             });
         }
+
         this.showStatus('✓ Team logos added');
     }
 
-    // ── Add score overlay from metadata ───────────────────────────────────────
-    addScore() {
+    // ── Add score (TV2 style — large numbers beside each logo, bottom) ─────────
+    async addScore() {
+        await this._ensureMetadataLoaded();
+
         if (!this.metadata) {
             this.showError('No metadata loaded for this keyframe');
             return;
         }
-        const { score, home_team_short, visiting_team_short, game_time } = this.metadata;
+        const { score, home_team_logo, visiting_team_logo } = this.metadata;
 
         if (!score) {
             this.showError('No score found in metadata');
             return;
         }
 
+        // Parse "3-0" or "3 - 0"
+        const parts      = score.split(/[-–]/).map(s => s.trim());
+        const homeScore  = parts[0] ?? '?';
+        const awayScore  = parts[1] ?? '?';
+
         const w = this.canvas.width;
         const h = this.canvas.height;
 
-        const BAR_W  = Math.round(w * 0.38);
-        const BAR_H  = Math.round(h * 0.11);
-        const BAR_X  = Math.round((w - BAR_W) / 2);
-        const BAR_Y  = Math.round(h * 0.04);
+        // ── Same layout constants as addTeamLogos ──────────────────────────
+        const LOGO_SIZE   = 200;
+        const PAD         = Math.round(w * 0.03);
+        const BOTTOM_Y    = h - PAD - LOGO_SIZE;
+        const SCORE_FONT  = 200;
+        // Score backing rect is as wide as one large digit + side padding
+        const SCORE_RW = 140;
+        // ───────────────────────────────────────────────────────────────────
 
-        // Dark pill background
-        this.addRect(BAR_X, BAR_Y, {
-            width: BAR_W,
-            height: BAR_H,
-            fillColor: '#000000cc',
-            strokeColor: '#ffffff44',
-            strokeWidth: 2,
-            cornerRadius: 12,
+        // Try to get dominant colour from the loaded logo images
+        let homeColor = '#0a1628';
+        let awayColor = '#0a1628';
+        if (home_team_logo) {
+            try {
+                if (!this.loadedLogos[home_team_logo])
+                    this.loadedLogos[home_team_logo] = await this._loadImg(home_team_logo);
+                homeColor = this._sampleLogoColor(this.loadedLogos[home_team_logo]);
+            } catch { /* keep default */ }
+        }
+        if (visiting_team_logo) {
+            try {
+                if (!this.loadedLogos[visiting_team_logo])
+                    this.loadedLogos[visiting_team_logo] = await this._loadImg(visiting_team_logo);
+                awayColor = this._sampleLogoColor(this.loadedLogos[visiting_team_logo]);
+            } catch { /* keep default */ }
+        }
+
+        // Home score — immediately right of home logo box
+        const homeScoreX = PAD + (LOGO_SIZE + 30);
+        this.addRect(homeScoreX, BOTTOM_Y, {
+            width: SCORE_RW + 30, height: LOGO_SIZE + 30,
+            fillColor: homeColor,
+            strokeColor: null, strokeWidth: 0,
+            cornerRadius: 0,
             layer: 'foreground'
         });
 
-        const fontSize = Math.round(BAR_H * 0.55);
-        const smallFs  = Math.round(BAR_H * 0.30);
-        const midY     = BAR_Y + Math.round(BAR_H * 0.18);
+        const rectW = SCORE_RW + 30;
+        const rectH = LOGO_SIZE + 30;
 
-        // Home team short name (left)
-        if (home_team_short) {
-            this.addText(home_team_short.toUpperCase(), BAR_X + Math.round(BAR_W * 0.04), midY + Math.round((BAR_H - smallFs) / 2) - 4, {
-                fontSize: smallFs,
+        this.addText(
+            homeScore,
+            homeScoreX + rectW / 2,
+            BOTTOM_Y + rectH / 2,
+            {
+                fontSize: SCORE_FONT,
                 color: '#ffffff',
-                strokeWidth: 0,
-                fontFamily: 'Arial Black',
-                layer: 'foreground'
-            });
-        }
-
-        // Score (centre)
-        this.addText(score, BAR_X + Math.round(BAR_W * 0.38), midY, {
-            fontSize,
-            color: '#ffffff',
-            strokeColor: '#000000',
-            strokeWidth: 3,
-            fontFamily: 'Impact',
-            layer: 'foreground'
-        });
-
-        // Away team short name (right)
-        if (visiting_team_short) {
-            this.addText(visiting_team_short.toUpperCase(), BAR_X + Math.round(BAR_W * 0.72), midY + Math.round((BAR_H - smallFs) / 2) - 4, {
-                fontSize: smallFs,
-                color: '#ffffff',
-                strokeWidth: 0,
-                fontFamily: 'Arial Black',
-                layer: 'foreground'
-            });
-        }
-
-        // Game time badge (small, top-right of bar)
-        if (game_time) {
-            this.addText(game_time, BAR_X + BAR_W + 8, BAR_Y + 4, {
-                fontSize: Math.round(BAR_H * 0.28),
-                color: '#ffcc00',
                 strokeColor: '#000000',
-                strokeWidth: 2,
+                strokeWidth: Math.max(2, Math.round(SCORE_FONT * 0.035)),
                 fontFamily: 'Impact',
+                fontWeight: 'bold',
                 layer: 'foreground'
-            });
-        }
+            }
+        );
+
+        // Away score — immediately left of away logo box
+        const awayLogoX  = w - PAD - (LOGO_SIZE + 30);
+        const awayScoreX = awayLogoX - (SCORE_RW + 30);
+        this.addRect(awayScoreX, BOTTOM_Y, {
+            width: SCORE_RW + 30, height: LOGO_SIZE + 30,
+            fillColor: awayColor,
+            strokeColor: null, strokeWidth: 0,
+            cornerRadius: 0,
+            layer: 'foreground'
+        });
+        this.addText(
+            awayScore,
+            awayScoreX + rectW / 2,
+            BOTTOM_Y + rectH / 2,
+            {
+                fontSize: SCORE_FONT,
+                color: '#ffffff',
+                strokeColor: '#000000',
+                strokeWidth: Math.max(2, Math.round(SCORE_FONT * 0.035)),
+                fontFamily: 'Impact',
+                fontWeight: 'bold',
+                layer: 'foreground'
+            }
+        );
 
         this.showStatus('✓ Score overlay added');
     }
@@ -494,7 +648,6 @@ class ThumbnailEditor {
         this._emitElements();
     }
 
-    // Move element later in the array → drawn last → visually on top
     moveElementUp(id) {
         const idx = this.elements.findIndex(e => e.id === id);
         if (idx < this.elements.length - 1) {
@@ -504,7 +657,6 @@ class ThumbnailEditor {
         }
     }
 
-    // Move element earlier in the array → drawn first → visually behind
     moveElementDown(id) {
         const idx = this.elements.findIndex(e => e.id === id);
         if (idx > 0) {
@@ -528,7 +680,7 @@ class ThumbnailEditor {
 
     _hitTest(px, py, el) {
         if (el.type === 'text') {
-            this.ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px "${el.fontFamily || 'Impact'}", sans-serif`;
+            this.ctx.font = `${el.fontWeight || 'bold'} ${el.fontSize}px ${el.fontFamily || 'Impact'}`;
             const w = this.ctx.measureText(el.content).width;
             const h = el.fontSize * 1.2;
             return px >= el.x && px <= el.x + w && py >= el.y && py <= el.y + h;
@@ -637,7 +789,7 @@ class ThumbnailEditor {
 // UI Integration
 // =============================================================================
 
-async function openThumbnailEditor(filename, metadata = null) {
+function openThumbnailEditor(filename, metadata = null) {
     let modal = document.getElementById('te-modal');
     if (!modal) {
         modal = _buildModal();
@@ -648,25 +800,8 @@ async function openThumbnailEditor(filename, metadata = null) {
 
     const editor = new ThumbnailEditor(filename, 'te-canvas');
     window._editor = editor;
-
-    // If metadata wasn't pre-fetched by caller, fetch it now
-    if (!metadata) {
-        try {
-            const res  = await fetch(`/api/video-metadata/${encodeURIComponent(filename)}`);
-            const data = await res.json();
-            // Only use metadata when the API confirmed a real video_id match
-            if (data.success && data.matched === true && data.metadata) {
-                metadata = data.metadata;
-            } else {
-                metadata = null; // no match → hide score/logo buttons
-            }
-        } catch (err) {
-            console.warn('[ThumbnailEditor] Metadata fetch failed:', err);
-            metadata = null;
-        }
-    }
-
-    editor.init(metadata);
+    //editor.init(metadata);
+    editor.init(); // no metadata here
     _wireControls(editor);
 }
 
@@ -686,7 +821,7 @@ function teAddText() {
     if (v) window._editor.addText(v);
 }
 function teAddRect() {
-    window._editor.addRect(100, 100, { width: 1200, height: 75, fillColor: '#000000', cornerRadius: 8 });
+    window._editor.addRect(100, 100, { width: 410, height: 100, fillColor: '#0a1628', cornerRadius: 8 });
 }
 function teDelElement(id) {
     window._editor.deleteElement(id);
@@ -747,10 +882,6 @@ function _buildModal() {
     m.id = 'te-modal';
     m.className = 'thumbnail-modal';
     m.innerHTML = `
-    <!-- Google Fonts – loaded inside modal so canvas can use them -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Montserrat:wght@700;900&family=Oswald:wght@600;700&display=swap" rel="stylesheet">
     <div class="modal-backdrop" onclick="closeThumbnailEditor()"></div>
     <div class="modal-content-wrapper">
 
@@ -829,9 +960,6 @@ function _buildModal() {
           <!-- Elements List -->
           <section class="control-section">
             <h3>Elements</h3>
-            <p style="margin:0 0 6px;font-size:10px;color:#555;line-height:1.4;">
-              ▲ = draw on top &nbsp;·&nbsp; ▼ = draw behind
-            </p>
             <div id="te-elements"></div>
           </section>
 
@@ -858,46 +986,36 @@ function _buildModal() {
 // Wire controls
 // =============================================================================
 function _wireControls(editor) {
+    // Reset event listeners
     document.removeEventListener('elementsChanged', _onElementsChanged);
     document.removeEventListener('editorStatus', _onEditorStatus);
     document.addEventListener('elementsChanged', _onElementsChanged);
     document.addEventListener('editorStatus', _onEditorStatus);
 
+    // Reset UI state
     const layerRow = document.getElementById('te-layer-row');
     if (layerRow) layerRow.classList.add('hidden');
+
     const blurChk = document.getElementById('te-blur-chk');
     if (blurChk) blurChk.checked = false;
+
     const blurRow = document.getElementById('te-blur-row');
     if (blurRow) blurRow.classList.add('hidden');
+
     const elList = document.getElementById('te-elements');
     if (elList) elList.innerHTML = '<p class="empty-text-list">No elements yet</p>';
 
-    // Show/hide metadata-driven controls depending on whether we have metadata
+    //  Metadata UI — always same initial state
     const metaButtons = document.getElementById('te-meta-buttons');
     const metaPanel   = document.getElementById('te-meta-panel');
 
-    if (editor.metadata) {
-        const m = editor.metadata;
-        if (metaButtons) metaButtons.classList.remove('hidden');
-        if (metaPanel)   metaPanel.classList.remove('hidden');
+    // Buttons should ALWAYS be visible (user can click them anytime)
+    if (metaButtons) metaButtons.classList.remove('hidden');
 
-        // Populate the info strip
-        const homeEl  = document.getElementById('te-meta-home');
-        const awayEl  = document.getElementById('te-meta-away');
-        const scoreEl = document.getElementById('te-meta-score');
-        const timeEl  = document.getElementById('te-meta-time');
-        const evtEl   = document.getElementById('te-meta-event');
-
-        if (homeEl)  homeEl.textContent  = m.home_team_short  || m.home_team  || '—';
-        if (awayEl)  awayEl.textContent  = m.visiting_team_short || m.visiting_team || '—';
-        if (scoreEl) scoreEl.textContent = m.score || '—';
-        if (timeEl)  timeEl.textContent  = m.game_time  ? `⏱ ${m.game_time}` : '';
-        if (evtEl)   evtEl.textContent   = m.event_type ? `· ${m.event_type}` : '';
-    } else {
-        if (metaButtons) metaButtons.classList.add('hidden');
-        if (metaPanel)   metaPanel.classList.add('hidden');
-    }
+    // Info panel should be hidden until metadata is actually loaded
+    if (metaPanel) metaPanel.classList.add('hidden');
 }
+
 
 function _onEditorStatus(e) {
     const el = document.getElementById('te-status');
@@ -921,7 +1039,8 @@ function _onElementsChanged(e) {
         return;
     }
 
-    list.innerHTML = '';
+    list.innerHTML = '<p style="margin:0 0 6px;font-size:10px;color:#555;line-height:1.4;">▲ = draw on top &nbsp;·&nbsp; ▼ = draw behind</p>';
+
     // Reverse so the topmost element in the list is drawn last (on top)
     [...elements].reverse().forEach(el => {
         const div = document.createElement('div');
@@ -962,6 +1081,9 @@ function _onElementsChanged(e) {
                        onchange="teProp(${el.id},'fillColor',this.value)" /></label>
                 <label>Corner <input type="number" value="${el.cornerRadius}" min="0" max="50"
                        onchange="teProp(${el.id},'cornerRadius',+this.value)" /></label>
+                <label>Opacity <input type="range" min="0" max="1" step="0.05" value="${el.opacity ?? 1}"
+                        onchange="teProp(${el.id},'opacity',+this.value)" />
+                </label>
             `;
         } else if (el.type === 'logo') {
             title = `🖼 Logo`;

@@ -78,37 +78,13 @@ function downloadAll() {
 // Open thumbnail editor with metadata
 // ============================================================================
 async function enhanceKeyframe(filename, event) {
-    if (event) event.stopPropagation(); // Prevent modal from closing
-    
-    // Close the image modal first
+    if (event) event.stopPropagation();
+
     closeModal();
-    
-    // Try to load metadata for this keyframe
-    // (You can expand this to fetch from your JSON API)
-    const metadata = await loadMetadataForKeyframe(filename);
-    
-    // Open enhanced thumbnail editor with metadata
-    openThumbnailEditor(filename, metadata);
+
+    openThumbnailEditor(filename);
 }
 
-async function loadMetadataForKeyframe(filename) {
-    try {
-        // Fetch metadata from your Flask API endpoint
-        const res = await fetch(`/api/video-metadata/${filename}`);
-        const data = await res.json();
-        
-        if (data.success) {
-            console.log('Loaded metadata:', data.metadata);
-            return data.metadata;
-        } else {
-            console.warn('No metadata found:', data.error);
-            return null;
-        }
-    } catch (e) {
-        console.error('Failed to load metadata:', e);
-        return null;
-    }
-}
 
 // ============================================================================
 // Gallery rendering with enhance button in cards
