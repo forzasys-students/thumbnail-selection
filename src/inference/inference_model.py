@@ -46,8 +46,7 @@ def load_model(model_name: str, weights_path: str, num_classes: int):
     print(f"[INFO] Loaded model '{model_name}' from {weights_path} on {device}")
     return model, device
 
-
-def classify_all_frames(model, root_dir: str, device, output_csv="predictions.csv"):
+def classify_all_frames(model, root_dir: str, device, output_csv="predictions.csv", batch_size: int = 64):
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -55,27 +54,41 @@ def classify_all_frames(model, root_dir: str, device, output_csv="predictions.cs
                              std=[0.229, 0.224, 0.225])
     ])
 
+    # Collect all frame paths first
+    all_frame_paths = []
+    for root, _, files in os.walk(root_dir):
+        for fname in sorted(f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))):
+            all_frame_paths.append(os.path.join(root, fname))
+
+    print(f"[INFO] Found {len(all_frame_paths)} frames. Running batched inference (batch_size={batch_size})...")
+
     results = []
     with torch.no_grad():
-        for root, _, files in os.walk(root_dir):
-            frame_files = [f for f in files if f.lower().endswith((".jpg", ".jpeg", ".png"))]
-            if not frame_files:
+        for batch_start in range(0, len(all_frame_paths), batch_size):
+            batch_paths = all_frame_paths[batch_start: batch_start + batch_size]
+
+            tensors, valid_paths = [], []
+            for frame_path in batch_paths:
+                try:
+                    img = Image.open(frame_path).convert("RGB")
+                    tensors.append(transform(img))
+                    valid_paths.append(frame_path)
+                except Exception:
+                    continue  # skip unreadable frames silently
+
+            if not tensors:
                 continue
 
-            for fname in sorted(frame_files):
-                frame_path = os.path.join(root, fname)
-                img = Image.open(frame_path).convert("RGB")
-                x = transform(img).unsqueeze(0).to(device)
+            x = torch.stack(tensors).to(device)           # (B, 3, 224, 224)
+            logits = model(x)
+            probs = torch.nn.functional.softmax(logits, dim=1)
+            pred_idxs = torch.argmax(probs, dim=1)         # (B,)
+            confs = probs[torch.arange(len(pred_idxs)), pred_idxs]  # (B,)
 
-                logits = model(x)
-                probs = torch.nn.functional.softmax(logits, dim=1)
-                pred_idx = torch.argmax(probs, dim=1).item()
-                conf = probs[0, pred_idx].item()
-
+            for frame_path, pred_idx, conf in zip(valid_paths, pred_idxs.tolist(), confs.tolist()):
                 parts = os.path.normpath(frame_path).split(os.sep)
                 game_name = parts[-3] if len(parts) >= 3 else "unknown_game"
                 clip_name = parts[-2] if len(parts) >= 2 else "unknown_clip"
-
                 results.append((game_name, clip_name, frame_path, LABELS[pred_idx], conf))
 
     df = pd.DataFrame(results, columns=["game_name", "clip_name", "frame_path", "pred_label", "confidence"])
@@ -97,4 +110,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     model, device = load_model(args.model, args.weights, num_classes=len(LABELS))
-    classify_all_frames(model, args.frames_root, device, args.output_csv)
+    classify_all_frames(model, args.frames_root, device, args.output_csv, batch_size=64)

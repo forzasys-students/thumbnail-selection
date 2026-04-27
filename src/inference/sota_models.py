@@ -90,7 +90,7 @@ class SOTAModels:
                 imgsz=640,       # Faster, still good for broadcast footage
                 conf=0.30,       # Higher - fewer false positives
                 iou=0.5,         # Lower - better for overlapping people (celebrations)
-                max_det=10,      # Limit detections (group celebrations rarely >10 people in frame)
+                max_det=5,       # Limit detections (group celebrations rarely >5 people in frame)
                 verbose=False,
             )[0]
             self._pose_cache[path] = result
@@ -634,10 +634,10 @@ class SOTAModels:
         coverage = area_px / img_area
 
         # SIZE SCORE
-        if 0.12 <= coverage <= 0.50:
+        if 0.15 <= coverage <= 0.50:
             size_score = 1.0
-        elif coverage < 0.12:
-            size_score = min(coverage / 0.12, 1.0)
+        elif coverage < 0.15:
+            size_score = min(coverage / 0.15, 1.0)
         else:
             size_score = max(1.0 - (coverage - 0.50) / 0.30, 0.5)
 

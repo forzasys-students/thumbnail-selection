@@ -17,9 +17,14 @@ What this file does (high level):
 """
 
 from __future__ import annotations
+
+import time as _time
+_PROCESS_START = _time.time()
+
 from sota_models import SOTAModels
 from logo_detector import LogoDetector
-from redundancy_reduction import reduce_redundancy, CLUSTER_DEBUG_DATA
+from redundancy_reduction import reduce_redundancy, CLUSTER_DEBUG_DATA, _CLIPEmbedder
+from concurrent.futures import ThreadPoolExecutor
 
 import os, sys
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -119,7 +124,6 @@ WEIGHTS = normalize_weights({
 # =============================================================================
 # MAIN PIPELINE ENTRYPOINT
 # =============================================================================
-
 def select_keyframes(
     pred_csv: str,
     seg_csv: str,
@@ -131,6 +135,12 @@ def select_keyframes(
     debug: bool = True,
     video_id: str = "unknown",
     redundancy_reduction: bool = True,
+    visual_threshold: float = 0.90,
+    logo_threshold: float = 0.50,
+    w_face: float = 0.25,
+    w_emotion: float = 0.15,
+    w_pose: float = 0.15,
+    w_iqa: float = 0.35,
 ):
     """
     This is the main selection stage (STEP 4 in the pipeline).
@@ -146,23 +156,37 @@ def select_keyframes(
     """
 
     t_pipeline_start = time.time()   
+    startup_sec = t_pipeline_start - _PROCESS_START  # import + interpreter startup
 
     # ---- Load heavy models ONCE (expensive startup) ----
     print("Initializing heavy models")
+    t_init = time.time()
+
     models = SOTAModels(device=device, yolo_pose_path=yolo_pose_path, debug=debug)
 
     # ---- Load logo detection model ----
     logo_det = LogoDetector(LOGO_CKPT_PATH, device=device)
 
+    init_sec = time.time() - t_init
+
     # ---- Load CSV inputs ----
     df_preds = pd.read_csv(pred_csv)
     df_segs = pd.read_csv(seg_csv)
 
-    # Parse frame index from frame filename so we can do segment slicing + time-gap checks.
-    df_preds["frame_index"] = df_preds["frame_path"].apply(extract_frame_index)
 
-    # Ensure output directory exists.
-    os.makedirs(output_dir, exist_ok=True)
+    ui_weights = normalize_weights({
+        "face": max(0.0, float(w_face)),
+        "emotion": max(0.0, float(w_emotion)),
+        "pose": max(0.0, float(w_pose)),
+        "iqa": max(0.0, float(w_iqa)),
+    })
+
+    if debug:
+        print(f"[CONFIG] redundancy_reduction={redundancy_reduction}")
+        print(f"[CONFIG] visual_threshold={visual_threshold}")
+        print(f"[CONFIG] logo_threshold={logo_threshold}")
+        print(f"[CONFIG] normalized weights={ui_weights}")
+    
 
     # ---- Analytics: counters and timing so you can tell what is happening ----
     analytics = {
@@ -186,24 +210,118 @@ def select_keyframes(
             "P4_behind_goal": 0
         },
         "timing": {
-            "preprocess_sec": 0.0,          # time spent on preprocess 
-            "redundancy_sec": 0.0,          # time spent on redundancy reduction 
-            "logo_sec": 0.0,                # time spent on logo detection 
-            "face_sec": 0.0,                # time spent on face quality + detection
-            "emotion_sec": 0.0,             # time spent on emotion detection
-            "pose_sec": 0.0,                # time spent on pose detection
-            "iqa_sec": 0.0,                 # time spent on IQA  
-            "sota_heavy_sec": 0.0,          # total time for heavier models (face/emotion/pose/IQA)
+            "data_load_sec": 0.0,           # reading CSVs / parsing inputs
+            "preprocess_sec": 0.0,          # cheap frame-quality filters
+            "redundancy_sec": 0.0,          # CLIP-based redundancy reduction
+            "logo_sec": 0.0,                # logo detection filter
+            "face_sec": 0.0,                # face detection / face quality
+            "emotion_sec": 0.0,             # emotion detection
+            "closeup_sec": 0.0,             # closeup_ratio_from_pose gate
+            "pose_sec": 0.0,                # pose scoring
+            "iqa_sec": 0.0,                 # IQA (TOPIQ)
+            "scoring_sec": 0.0,             # final score computation
+            "final_select_sec": 0.0,        # global ranking + temporal suppression
+            "save_sec": 0.0,                # image + CSV writing
         }
     }
 
+
     # Global pool of candidates (after all segment processing).
     all_candidates: List[dict] = []
+
+
+    t_data = time.time()
+
+    # Parse frame index from frame filename so we can do segment slicing + time-gap checks.
+    df_preds["frame_index"] = df_preds["frame_path"].apply(extract_frame_index)
+
+    # Ensure output directory exists.
+    os.makedirs(output_dir, exist_ok=True)
+
+    analytics["timing"]["data_load_sec"] += (time.time() - t_data)
+
 
     print(f"{'='*60}")
     print("CLOSEUP-ONLY KEYFRAME SELECTION")
     print(f"Processing {len(df_segs)} closeup segments")
     print(f"{'='*60}\n")
+
+    # =============================================================================
+    # PRE-COMPUTATION — scoped to segment frames only
+    # =============================================================================
+
+    # --- Build a mask of only frames that fall within a segment range ---
+    # df_preds has frame_index already parsed above.
+    # We OR together the range masks for each segment to get a single filter.
+    _seg_mask = pd.Series(False, index=df_preds.index)
+    for _, _seg_row in df_segs.iterrows():
+        _s = extract_frame_index(_seg_row["start_frame"])
+        _e = extract_frame_index(_seg_row["end_frame"])
+        _seg_mask |= (df_preds["frame_index"] >= _s) & (df_preds["frame_index"] <= _e)
+
+    _df_seg_frames = df_preds[_seg_mask]
+    _CLOSEUP_LABELS = {
+        "Close-up_player_or_field_referee",
+        "Close-up_corner",
+        "Close-up_side_staff",
+        "Close-up_behind_the_goal",
+    }
+    _df_seg_frames = _df_seg_frames[_df_seg_frames["pred_label"].isin(_CLOSEUP_LABELS)]
+
+    print(f"[PREPROCESS] Scoped to {len(_df_seg_frames)} closeup frames inside segments "
+          f"(skipping {len(df_preds) - len(_df_seg_frames)} non-closeup/non-segment frames)")
+
+    # --- Collect paths passing confidence gate (within segments only) ---
+    _all_candidate_paths = []
+    _conf_map: dict = {}
+    for _, _row in _df_seg_frames.iterrows():
+        _conf = float(_row.get("confidence", 0.5))
+        if _conf >= MIN_FINAL_CONF:
+            _p = _row["frame_path"]
+            _all_candidate_paths.append(_p)
+            _conf_map[_p] = _conf
+
+    # --- Parallel preprocessing ---
+    print(f"[PREPROCESS] Pre-computing metrics for {len(_all_candidate_paths)} candidate frames...")
+    _t_pre_global = time.time()
+    metrics_cache: dict = {}
+
+    def _safe_metrics(p: str):
+        return p, compute_frame_metrics(p)
+
+    with ThreadPoolExecutor(max_workers=8) as _pool:
+        for _path, _result in _pool.map(_safe_metrics, _all_candidate_paths):
+            if _result is not None:
+                metrics_cache[_path] = _result
+
+    analytics["timing"]["preprocess_sec"] += (time.time() - _t_pre_global)
+    print(f"[PREPROCESS] Done in {analytics['timing']['preprocess_sec']:.2f}s "
+          f"({len(metrics_cache)} frames kept)")
+
+    # --- CLIP warm-up on quality-passing frames only ---
+    # Apply a conservative global quality floor before deciding what to CLIP-embed.
+    # Per-segment thresholds still apply inside the loop — this just avoids
+    # wasting GPU time on frames that will definitely be filtered anyway.
+    if redundancy_reduction:
+        _GLOBAL_MIN_LUM   = min(t["min_luminance"] for t in QUALITY_THRESHOLDS.values())
+        _GLOBAL_MIN_SHARP = min(t["min_sharpness"]  for t in QUALITY_THRESHOLDS.values())
+        _GLOBAL_MAX_UNIF  = max(t["max_uniformity"] for t in QUALITY_THRESHOLDS.values())
+        _GLOBAL_MIN_TEX   = min(t.get("min_texture", 0.0) for t in QUALITY_THRESHOLDS.values())
+
+        _clip_paths = [
+            p for p, m in metrics_cache.items()
+            if (m["luminance"]  >= _GLOBAL_MIN_LUM
+            and m["sharpness"]  >= _GLOBAL_MIN_SHARP
+            and m["uniformity"] <= _GLOBAL_MAX_UNIF
+            and m["texture"]    >= _GLOBAL_MIN_TEX)
+        ]
+        print(f"[CLIP] Pre-warming embeddings for {len(_clip_paths)} quality-passing frames "
+              f"({len(metrics_cache) - len(_clip_paths)} skipped by quality floor)...")
+        _t_clip = time.time()
+        _clip_embedder = _CLIPEmbedder.get(device=device)
+        _clip_embedder.embed_batch(_clip_paths, batch_size=64)
+        analytics["timing"]["redundancy_sec"] += (time.time() - _t_clip)
+        print(f"[CLIP] Warm-up done in {time.time() - _t_clip:.2f}s")
 
     # =============================================================================
     # Iterate over segments 
@@ -226,7 +344,12 @@ def select_keyframes(
         end = extract_frame_index(seg["end_frame"])
 
         # Slice predictions to only frames within this segment.
-        segment_frames = df_preds[(df_preds.frame_index >= start) & (df_preds.frame_index <= end)]
+        #segment_frames = df_preds[(df_preds.frame_index >= start) & (df_preds.frame_index <= end)]
+        segment_frames = df_preds[
+            (df_preds.frame_index >= start) &
+            (df_preds.frame_index <= end) &
+            (df_preds["pred_label"].isin(_CLOSEUP_LABELS))
+        ]
 
         if debug:
             print("\n" + "-" * 72)
@@ -254,7 +377,11 @@ def select_keyframes(
 
             analytics["frames_processed"] += 1
 
-            metrics = compute_frame_metrics(path)
+            #metrics = compute_frame_metrics(path)
+            metrics = metrics_cache.get(path)
+            if metrics is None:
+                continue  # not in cache means unreadable or below conf gate — skip
+
             if metrics is None:
                 continue  # unreadable image — skip silently
  
@@ -318,7 +445,7 @@ def select_keyframes(
             pre_items = reduce_redundancy(
                 pre_items,
                 method="hybrid",
-                visual_threshold=0.92,
+                visual_threshold=float(visual_threshold),
                 visual_method="clip",
                 temporal_window=TEMPORAL_WINDOW,
                 score_key="aesthetic_score",   
@@ -356,7 +483,7 @@ def select_keyframes(
         for it, p in zip(pre_items, logo_probs):
             it["logo_prob"] = float(p)
                         
-            if p >= LOGO_THRESHOLD:
+            if p >= float(logo_threshold):
                 analytics["frames_filtered_logo"] += 1
                 continue
                         
@@ -368,7 +495,7 @@ def select_keyframes(
         analytics["timing"]["logo_sec"] += (time.time() - t_logo)
 
         if debug:
-            print(f"[LOGO] <<< Stage 2C logo: {before_logo} -> {after_logo} (thr={LOGO_THRESHOLD})")
+            print(f"[LOGO] <<< Stage 2C logo: {before_logo} -> {after_logo} (thr={logo_threshold})")
             if before_logo > 0:
                 avg_prob = sum(logo_probs) / len(logo_probs)
                 print(f"[LOGO] Average logo prob: {avg_prob:.3f}")
@@ -380,16 +507,10 @@ def select_keyframes(
         if debug:
             print("[SOTA] >>> Stage 3: Scoring signals (face, emotion, pose)")
 
-        t_sota = time.time()
-
         candidates: List[dict] = []
         for it in pre_items:
             path = it["path"]
-            
-            closeup = models.closeup_ratio_from_pose(path)
-            if closeup < th["min_closeup_ratio"]:
-                analytics["frames_filtered_closeup"] += 1
-                continue
+        
 
             # Face quality (includes occlusion/visibility score)
             t0 = time.time()
@@ -401,7 +522,16 @@ def select_keyframes(
             emo_intensity, emo_label = models.emotion_intensity_from_faces(path, detected_faces, img=img, max_faces=5)
             analytics["timing"]["emotion_sec"] += (time.time() - t0)
 
-            # Pose detection
+            # Pose detection (close up ratio is counted as a part of pose detection because we use the yolo bounding boxes to calculate it)
+            # In the report we added their time up 
+            t0 = time.time()
+            closeup = models.closeup_ratio_from_pose(path)
+            analytics["timing"]["closeup_sec"] += (time.time() - t0)
+
+            if closeup < th["min_closeup_ratio"]:
+                analytics["frames_filtered_closeup"] += 1
+                continue
+
             t0 = time.time()
             pose_score, pose_label, pose_breakdown = models.pose_signals(path)
             analytics["timing"]["pose_sec"] += (time.time() - t0)
@@ -481,8 +611,6 @@ def select_keyframes(
                 "sharpness": float(it["sharpness"]),
 
             })
-
-        analytics["timing"]["sota_heavy_sec"] += (time.time() - t_sota)
 
         if debug:
                 print(f"[EMO] {os.path.basename(path)} faces={num_faces} fq={face_q:.2f} "
@@ -587,10 +715,10 @@ def select_keyframes(
             # ---------- WEIGHTED CONTRIBUTIONS ----------
             #w_content = WEIGHTS["content"] * content_signal
             
-            w_face = WEIGHTS["face"] * face_signal  
-            w_emotion = WEIGHTS["emotion"] * emotion_signal
-            w_pose = WEIGHTS["pose"] * pose_signal
-            w_iqa = WEIGHTS["iqa"] * iqa_signal
+            w_face = ui_weights["face"] * face_signal 
+            w_emotion = ui_weights["emotion"] * emotion_signal
+            w_pose = ui_weights["pose"] * pose_signal
+            w_iqa = ui_weights["iqa"] * iqa_signal
             score_pre = w_iqa + w_face + w_emotion + w_pose
 
             final_score = score_pre * c["segment_mult"]
@@ -619,6 +747,11 @@ def select_keyframes(
             c["final_score"] = float(final_score)
 
             scored.append(c)
+
+        analytics["timing"]["scoring_sec"] += (time.time() - t_sc)
+
+        if debug:
+            print(f"[SCORING] <<< Stage 5 done in {time.time() - t_sc:.2f}s")
 
         if not scored:
             if debug:
@@ -660,11 +793,14 @@ def select_keyframes(
                 break
         return selected
 
+    t_final = time.time()
     final_selection = select_final_frames(all_candidates, MIN_FINAL_SCORE, top_n)
 
     if len(final_selection) < top_n and ALLOW_SCORE_FLOOR_FALLBACK:
         print(f"[FINAL] Only {len(final_selection)}/{top_n} with strict floor, trying fallback ({FALLBACK_MIN_FINAL_SCORE})")
         final_selection = select_final_frames(all_candidates, FALLBACK_MIN_FINAL_SCORE, top_n)
+
+    analytics["timing"]["final_select_sec"] += (time.time() - t_final)
 
     print(f"[FINAL] <<< Selected: {len(final_selection)} / {top_n}\n")
 
@@ -672,7 +808,9 @@ def select_keyframes(
     # -----------------------------------------------------------------------------
     # Save selected images + write final CSV.
     # -----------------------------------------------------------------------------
+    t_save = time.time()
     results = []
+
     for rank, c in enumerate(final_selection):
         pr = c.get("segment_priority", "NA")
         conf = float(c.get("model_confidence", 0.0))
@@ -735,6 +873,8 @@ def select_keyframes(
 
     results_df = pd.DataFrame(results)
     results_df.to_csv(output_csv, index=False)
+    analytics["timing"]["save_sec"] += (time.time() - t_save)
+
 
     if CLUSTER_DEBUG_DATA:
         df_clusters = pd.DataFrame(CLUSTER_DEBUG_DATA)
@@ -749,7 +889,7 @@ def select_keyframes(
     print(f"{'='*60}")
     print(f"Frames processed (after conf gate): {analytics['frames_processed']}")
     print(f"Filtered by conf (<{MIN_FINAL_CONF}):        {analytics['frames_filtered_conf']}")
-    print(f"\nHECATE filters:")
+    print(f"\nPreprocessing filters:")
     print(f"  Luminance (dark frames):         {analytics['frames_filtered_luminance']}")
     print(f"  Sharpness (blurry frames):       {analytics['frames_filtered_sharpness']}")
     print(f"  Uniformity (flat frames):        {analytics['frames_filtered_uniformity']}")
@@ -764,19 +904,46 @@ def select_keyframes(
     for k, v in analytics["candidates_by_segment_type"].items():
         print(f"  {k}: {v}")
 
-    total_pipeline_sec = time.time() - t_pipeline_start
+    full_pipeline_sec = time.time() - _PROCESS_START
 
-    print("\nTiming breakdown (cumulative across all segments):")
-    print(f"  Preprocessing:     {analytics['timing']['preprocess_sec']:.2f}s")
-    print(f"  Redundancy (CLIP): {analytics['timing']['redundancy_sec']:.2f}s")
-    print(f"  Logo detection:    {analytics['timing']['logo_sec']:.2f}s")
-    print(f"  Face detection:    {analytics['timing']['face_sec']:.2f}s")
-    print(f"  Emotion detection: {analytics['timing']['emotion_sec']:.2f}s")
-    print(f"  Pose detection:    {analytics['timing']['pose_sec']:.2f}s")
-    print(f"  IQA (TOPIQ):       {analytics['timing']['iqa_sec']:.2f}s")
-    print(f"  Heavy models total:{analytics['timing']['face_sec'] + analytics['timing']['emotion_sec'] + analytics['timing']['pose_sec'] + analytics['timing']['iqa_sec']:.2f}s")
-    print(f"  Total pipeline:    {total_pipeline_sec:.2f}s")
+    print("\nTiming breakdown (exclusive, additive):")
+    print(f"  Python startup+imports: {startup_sec:.2f}s")
+    print(f"  Model init:             {init_sec:.2f}s")
+    print(f"  CSV/data load:          {analytics['timing']['data_load_sec']:.2f}s")
+    print(f"  Preprocessing:          {analytics['timing']['preprocess_sec']:.2f}s")
+    print(f"  Redundancy (CLIP):      {analytics['timing']['redundancy_sec']:.2f}s")
+    print(f"  Logo detection:         {analytics['timing']['logo_sec']:.2f}s")
+    print(f"  Face detection:         {analytics['timing']['face_sec']:.2f}s")
+    print(f"  Emotion detection:      {analytics['timing']['emotion_sec']:.2f}s")
+    print(f"  Closeup gate (pose):    {analytics['timing']['closeup_sec']:.2f}s")
+    print(f"  Pose scoring:           {analytics['timing']['pose_sec']:.2f}s")
+    print(f"  IQA (TOPIQ):            {analytics['timing']['iqa_sec']:.2f}s")
+    print(f"  Final scoring:          {analytics['timing']['scoring_sec']:.2f}s")
+    print(f"  Final selection:        {analytics['timing']['final_select_sec']:.2f}s")
+    print(f"  Saving outputs:         {analytics['timing']['save_sec']:.2f}s")
 
+    accounted = (
+        startup_sec +
+        init_sec +
+        analytics['timing']['data_load_sec'] +
+        analytics['timing']['preprocess_sec'] +
+        analytics['timing']['redundancy_sec'] +
+        analytics['timing']['logo_sec'] +
+        analytics['timing']['face_sec'] +
+        analytics['timing']['emotion_sec'] +
+        analytics['timing']['closeup_sec'] +
+        analytics['timing']['pose_sec'] +
+        analytics['timing']['iqa_sec'] +
+        analytics['timing']['scoring_sec'] +
+        analytics['timing']['final_select_sec'] +
+        analytics['timing']['save_sec']
+    )
+
+    other_sec = max(0.0, full_pipeline_sec - accounted)
+
+    print(f"  Accounted for:          {accounted:.2f}s")
+    print(f"  Total step 4:           {full_pipeline_sec:.2f}s")
+    print(f"  Other / loop overhead:  {other_sec:.2f}s")
 
 # =============================================================================
 # CLI entrypoint
@@ -798,6 +965,12 @@ if __name__ == "__main__":
                         help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
     parser.add_argument("--redundancy_reduction", type=str, default="true",
                         help="Enable redundancy reduction: 'true' or 'false' (default: true)")
+    parser.add_argument("--visual_threshold", type=float, default=0.85)
+    parser.add_argument("--logo_threshold", type=float, default=0.50)
+    parser.add_argument("--w_face", type=float, default=0.25)
+    parser.add_argument("--w_emotion", type=float, default=0.15)
+    parser.add_argument("--w_pose", type=float, default=0.15)
+    parser.add_argument("--w_iqa", type=float, default=0.35)
     args = parser.parse_args()
 
     enable_rr = args.redundancy_reduction.lower() not in ("false", "0", "no", "off")
@@ -814,4 +987,12 @@ if __name__ == "__main__":
         debug=args.debug,
         video_id=args.video_id,
         redundancy_reduction=enable_rr,
+        visual_threshold=args.visual_threshold,
+        logo_threshold=args.logo_threshold,
+        w_face=args.w_face,
+        w_emotion=args.w_emotion,
+        w_pose=args.w_pose,
+        w_iqa=args.w_iqa,
     )
+
+    

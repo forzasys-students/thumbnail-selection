@@ -84,6 +84,9 @@ class _CLIPEmbedder:
         self.model, self.preprocess = clip.load("ViT-B/32", device=device)
         #self.model, self.preprocess = clip.load("ViT-L/14", device=device)
         self.model.eval()
+
+        self._embedding_cache: dict = {}   
+
         print("[CLIP] Ready.")
 
     @classmethod
@@ -96,37 +99,49 @@ class _CLIPEmbedder:
     def embed_batch(self, paths: list, batch_size: int = 64) -> dict:
         """
         Encode all paths in one or more batched GPU passes.
+        Results are cached internally — repeated calls for the same path
+        are instant dict lookups with no GPU work.
 
-        Returns {path: np.ndarray} — L2-normalised unit vectors ready for
-        cosine similarity via dot product.
-
-        Unreadable paths get a zero vector so they never win a cluster
-        comparison but won't crash the pipeline.
-
-        Args:
-            paths:      list of image file paths
-            batch_size: frames per GPU forward pass. 64 works on 8GB VRAM;
-                        reduce to 32 if you hit OOM.
+        Returns {path: np.ndarray} — L2-normalised unit vectors.
+        Unreadable paths get a zero vector.
         """
-        embeddings = {}
-        for start in range(0, len(paths), batch_size):
-            batch_paths = paths[start: start + batch_size]
+        embeddings: dict = {}
+        to_compute: list = []
+
+        # Split paths into cache hits and misses
+        for p in paths:
+            if p in self._embedding_cache:
+                embeddings[p] = self._embedding_cache[p]
+            else:
+                to_compute.append(p)
+
+        # Only run the GPU forward pass for cache misses
+        for start in range(0, len(to_compute), batch_size):
+            batch_paths = to_compute[start: start + batch_size]
             tensors, valid_paths = [], []
+
             for p in batch_paths:
                 try:
                     img = self._Image.open(p).convert("RGB")
                     tensors.append(self.preprocess(img))
                     valid_paths.append(p)
                 except Exception:
-                    embeddings[p] = np.zeros(512, dtype=np.float32)
+                    zero = np.zeros(512, dtype=np.float32)
+                    self._embedding_cache[p] = zero
+                    embeddings[p] = zero
+
             if not tensors:
                 continue
+
             batch_tensor = torch.stack(tensors).to(self.device)
             with torch.no_grad():
                 feats = self.model.encode_image(batch_tensor).float()
-                feats = feats / feats.norm(dim=-1, keepdim=True)  # L2 normalise
+                feats = feats / feats.norm(dim=-1, keepdim=True)
+
             for path, vec in zip(valid_paths, feats.cpu().numpy()):
+                self._embedding_cache[path] = vec
                 embeddings[path] = vec
+
         return embeddings
 
 
