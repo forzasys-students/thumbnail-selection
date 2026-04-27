@@ -2,6 +2,7 @@ import os
 import re
 import cv2
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 
 def safe_label(label: str) -> str:
@@ -155,26 +156,22 @@ def extract_adaptive_frames(
     return saved_paths
 
 
+def _write_frame(args):
+    path, frame = args
+    cv2.imwrite(path, frame)
+
 def extract_frames_from_clip(
     video_path: str,
     output_dir: str,
     fps_target: int = 5,
     video_id: Optional[str] = None,
 ) -> None:
-    """
-    Extract evenly-spaced frames from a single video clip.
-
-    video_id is accepted explicitly so callers don't need to embed it in
-    the filename. Falls back to parsing the path if not provided.
-    """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Resolve video_id — explicit arg wins, then parse from path
     if not video_id:
         video_id = extract_video_id_from_path(video_path)
-
     if video_id:
-        print(f"[INFO] video_id={video_id} (source: {'arg' if video_id else 'path'})")
+        print(f"[INFO] video_id={video_id} (source: arg)")
     else:
         video_id = "unknown"
         print(f"[WARN] Could not determine video_id for {video_path}. Frames will use 'unknown'.")
@@ -188,22 +185,25 @@ def extract_frames_from_clip(
 
     idx = 0
     saved = 0
+    write_queue = []
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
         if idx % frame_interval == 0:
-            # Consistent naming: video_{id}_frame_{index}.jpg — always
             frame_name = f"video_{video_id}_frame_{idx:05d}.jpg"
             frame_path = os.path.join(output_dir, frame_name)
-            cv2.imwrite(frame_path, frame)
+            write_queue.append((frame_path, frame.copy()))
             saved += 1
-
         idx += 1
 
     cap.release()
+
+    # Write all frames in parallel — cv2.imwrite releases the GIL
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        pool.map(_write_frame, write_queue)
+
     print(f"[INFO] Extracted {saved} frames → {output_dir}")
 
 
