@@ -4,82 +4,244 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Thumbnail Selection</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>Thumbnail Selection</h1>
-        <p class="subtitle">Upload a video and select a model to extract key frames for thumbnails</p>
-        
-        <div class="info-box">
-            <strong>How it works:</strong><br>
-            The system will analyze your video, run inference, and extract the most important frames for thumbnails.
-        </div>
-        
-        <form method="post" enctype="multipart/form-data">
-            <div class="form-group">
-                <label for="model">Select Model:</label>
-                <select name="model" id="model" required>
-                    <option value="resnet18">ResNet-18</option>
-                    <option value="resnet50">ResNet-50</option>
-                    <option value="efficientnet">EfficientNet</option>
-                    <option value="convnext">ConvNeXt (Most accurate)</option>
-                    <option value="vit">Vision Transformer</option>
-                </select>
-            </div>
 
-            <div class="form-group">
-                <label>Upload Video:</label>
+    <div class="page-wrapper">
 
-                <input type="file"
-                    name="video"
-                    id="video"
-                    accept=".mp4,.avi,.mov"
-                    hidden
-                    required>
+        <!-- ── Header ── -->
+        <header class="page-header">
+            <div class="header-eyebrow">AI Video Pipeline</div>
+            <h1>Thumbnail <span class="accent">Selection</span></h1>
+            <p class="header-sub">Upload your video, configure each signal, and let the pipeline do the rest.</p>
+        </header>
 
-                <label for="video" class="file-btn" id="fileLabel">
-                    📁 Choose Video File
-                </label>
-            </div>
+        <form method="post" enctype="multipart/form-data" id="mainForm">
 
-            <div class="form-group">
-                <label for="fps">
-                    Frame Extraction Rate
-                    <span class="setting-badge" id="fpsValue">5 fps</span>
-                </label>
-                <input type="range"
-                    name="fps"
-                    id="fps"
-                    min="1" max="24" value="12" step="1"
-                    class="range-slider"
-                    oninput="updateFps(this.value)">
-                <div class="range-labels">
-                    <span>1 fps · faster run</span>
-                    <span>24 fps · max detail</span>
-                </div>
-            </div>
+            <!-- ══════════════════════════════════════
+                 SECTION A — Video + Model + FPS
+                 ══════════════════════════════════════ -->
+            <section class="card section-input">
+                <div class="section-label">Input</div>
 
-            <div class="form-group">
-                <div class="toggle-row">
-                    <div class="toggle-info">
-                        <span class="toggle-title">Redundancy Reduction</span>
-                        <span class="toggle-desc">Removes near-duplicate keyframes automatically</span>
+                <div class="input-row">
+                    <!-- Video upload -->
+                    <div class="form-group upload-group">
+                        <label>Video File</label>
+                        <input type="file" name="video" id="video"
+                               accept=".mp4,.avi,.mov" hidden required>
+                        <label for="video" class="file-btn" id="fileLabel">
+                            <span class="file-icon">▶</span>
+                            <span id="fileLabelText">Choose Video File</span>
+                        </label>
                     </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox"
-                            name="redundancy_reduction"
-                            id="redundancyToggle"
-                            value="1"
-                            checked>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-            </div>
 
-            <button type="submit">Start Processing</button>
+                    <!-- Model select -->
+                    <div class="form-group">
+                        <label for="model">Classifier Model</label>
+                        <div class="select-wrap">
+                            <select name="model" id="model" required>
+                                <option value="resnet18">ResNet-18 (Fast)</option>
+                                <option value="resnet50">ResNet-50 (Balanced)</option>
+                                <option value="efficientnet">EfficientNet (Accurate & Fast)</option>
+                                <option value="convnext">ConvNeXt (Accurate & Slow)</option>
+                                <option value="vit">Vision Transformer (Slow)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- FPS slider -->
+                    <div class="form-group fps-group">
+                        <label for="fps">
+                            Extraction Rate
+                            <span class="setting-badge" id="fpsValue">12 fps</span>
+                        </label>
+                        <input type="range" name="fps" id="fps"
+                               min="1" max="24" value="12" step="1"
+                               class="range-slider"
+                               oninput="updateFps(this.value)">
+                        <div class="range-labels">
+                            <span>1 fps · faster run</span>
+                            <span>24 fps · max detail</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="post-inline-row">
+                    <div class="toggle-block">
+                        <div class="toggle-row">
+                            <div class="toggle-info">
+                                <span class="toggle-title">Redundancy Reduction</span>
+                                <span class="toggle-desc">Removes near-duplicate keyframes automatically</span>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" name="redundancy_reduction"
+                                    id="redundancyToggle" value="1" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="threshold-block">
+                        <label class="weight-label" for="visual_threshold">
+                            Visual Threshold
+                            <span class="threshold-hint">Higher = stricter dedup</span>
+                        </label>
+                        <div class="weight-input-wrap">
+                            <input type="number" name="visual_threshold" id="visual_threshold"
+                                class="weight-input threshold-input" min="0" max="1"
+                                step="0.01" value="0.90"
+                                placeholder="0.90">
+                            <span class="weight-unit">/ 1.0</span>
+                        </div>
+                    </div>
+                </div>
+
+            </section>
+
+
+            <!-- ══════════════════════════════════════
+                 SECTION B — Signal Weights Grid
+                 ══════════════════════════════════════ -->
+            <section class="card section-signals">
+                <div class="section-header-row">
+                    <div class="section-label">Signal Weights</div>
+                    <div class="weight-total-wrap">
+                        <span class="weight-total-label">Total</span>
+                        <span class="weight-total" id="weightTotal">1.00</span>
+                        <span class="weight-status" id="weightStatus">✓</span>
+                    </div>
+                </div>
+                <p class="section-hint">Set how much each signal contributes to the final thumbnail score. Default values are recommended. Values are normalised automatically.</p>
+
+                <div class="signals-grid">
+                        
+                    <!-- Logo -->
+                    <div class="signal-card logo-card" data-signal="logo">
+                        <div class="signal-top">
+                            <div class="signal-icon logo-icon">◈</div>
+                            <div class="signal-info">
+                                <div class="signal-name">Logo</div>
+                                <div class="signal-model">ResNet-50</div>
+                            </div>
+                        </div>
+                        <div class="weight-field">
+                            <label class="weight-label" for="logo_p">p-value</label>
+                            <div class="weight-input-wrap">
+                                <input type="number" name="logo_p" id="logo_p"
+                                       class="weight-input" min="0" max="1"
+                                       step="0.01" value="0.50"
+                                       placeholder="0.50">
+                                <span class="weight-unit">thresh</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Face -->
+                    <div class="signal-card" data-signal="face">
+                        <div class="signal-top">
+                            <div class="signal-icon face-icon">◈</div>
+                            <div class="signal-info">
+                                <div class="signal-name">Face</div>
+                                <div class="signal-model">InsightFace</div>
+                            </div>
+                        </div>
+                        <div class="weight-field">
+                            <label class="weight-label" for="w_face">Weight</label>
+                            <div class="weight-input-wrap">
+                                <input type="number" name="w_face" id="w_face"
+                                       class="weight-input" min="0" max="1"
+                                       step="0.01" value="0.25"
+                                       placeholder="0.25"
+                                       oninput="updateWeightTotal()">
+                                <span class="weight-unit">/ 1.0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Emotion -->
+                    <div class="signal-card" data-signal="emotion">
+                        <div class="signal-top">
+                            <div class="signal-icon emotion-icon">◈</div>
+                            <div class="signal-info">
+                                <div class="signal-name">Emotion</div>
+                                <div class="signal-model">HSEmotion</div>
+                            </div>
+                        </div>
+                        <div class="weight-field">
+                            <label class="weight-label" for="w_emotion">Weight</label>
+                            <div class="weight-input-wrap">
+                                <input type="number" name="w_emotion" id="w_emotion"
+                                       class="weight-input" min="0" max="1"
+                                       step="0.01" value="0.15"
+                                       placeholder="0.15"
+                                       oninput="updateWeightTotal()">
+                                <span class="weight-unit">/ 1.0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pose -->
+                    <div class="signal-card" data-signal="pose">
+                        <div class="signal-top">
+                            <div class="signal-icon pose-icon">◈</div>
+                            <div class="signal-info">
+                                <div class="signal-name">Pose</div>
+                                <div class="signal-model">YOLO26m-pose</div>
+                            </div>
+                        </div>
+                        <div class="weight-field">
+                            <label class="weight-label" for="w_pose">Weight</label>
+                            <div class="weight-input-wrap">
+                                <input type="number" name="w_pose" id="w_pose"
+                                       class="weight-input" min="0" max="1"
+                                       step="0.01" value="0.15"
+                                       placeholder="0.15"
+                                       oninput="updateWeightTotal()">
+                                <span class="weight-unit">/ 1.0</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- IQA -->
+                    <div class="signal-card" data-signal="iqa">
+                        <div class="signal-top">
+                            <div class="signal-icon iqa-icon">◈</div>
+                            <div class="signal-info">
+                                <div class="signal-name">IQA</div>
+                                <div class="signal-model">TOPIQ</div>
+                            </div>
+                        </div>
+                        <div class="weight-field">
+                            <label class="weight-label" for="w_iqa">Weight</label>
+                            <div class="weight-input-wrap">
+                                <input type="number" name="w_iqa" id="w_iqa"
+                                       class="weight-input" min="0" max="1"
+                                       step="0.01" value="0.35"
+                                       placeholder="0.35"
+                                       oninput="updateWeightTotal()">
+                                <span class="weight-unit">/ 1.0</span>
+                            </div>
+                        </div>
+                    </div>
+
+
+                </div><!-- /signals-grid -->
+            </section>
+
+            <!-- ── Submit ── -->
+            <button type="submit" class="submit-btn" id="submitBtn">
+                <span class="submit-text">Start Processing</span>
+                <span class="submit-arrow">→</span>
+            </button>
+
         </form>
-    </div>
+
+    </div><!-- /page-wrapper -->
 
     <script src="{{ url_for('static', filename='js/index.js') }}"></script>
 </body>

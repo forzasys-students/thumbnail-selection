@@ -27,19 +27,33 @@ DEFAULT_MODEL="resnet18"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
-        --video)         VIDEO_PATH="$2";  shift ;;
-        --model)         MODEL_NAME="$2";  shift ;;
-        --video_id)      VIDEO_ID="$2";    shift ;;
-        --fps)           FPS="$2";         shift ;;
-        --no_redundancy) NO_REDUNDANCY=1         ;;
+        --video)             VIDEO_PATH="$2";         shift ;;
+        --model)             MODEL_NAME="$2";         shift ;;
+        --video_id)          VIDEO_ID="$2";           shift ;;
+        --fps)               FPS="$2";                shift ;;
+        --visual_threshold)  VISUAL_THRESHOLD="$2";   shift ;;
+        --logo_p)            LOGO_P="$2";             shift ;;
+        --w_face)            W_FACE="$2";             shift ;;
+        --w_emotion)         W_EMOTION="$2";          shift ;;
+        --w_pose)            W_POSE="$2";             shift ;;
+        --w_iqa)             W_IQA="$2";              shift ;;
+        --no_redundancy)     NO_REDUNDANCY=1 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
     shift
 done
 
+
 VIDEO_PATH="${VIDEO_PATH:-$DEFAULT_VIDEO_PATH}"
 MODEL_NAME="${MODEL_NAME:-$DEFAULT_MODEL}"
-FPS="${FPS:-5}"
+FPS="${FPS:-12}"
+VISUAL_THRESHOLD="${VISUAL_THRESHOLD:-0.90}"
+LOGO_P="${LOGO_P:-0.50}"
+W_FACE="${W_FACE:-0.25}"
+W_EMOTION="${W_EMOTION:-0.15}"
+W_POSE="${W_POSE:-0.15}"
+W_IQA="${W_IQA:-0.35}"
+
 REDUNDANCY_ARG="true"
 if [ -n "$NO_REDUNDANCY" ]; then
     REDUNDANCY_ARG="false"
@@ -58,6 +72,13 @@ echo "[INFO] Using model:    $MODEL_NAME"
 echo "[INFO] Using video_id: $VIDEO_ID"
 echo "[INFO] Using fps:      $FPS"
 echo "[INFO] Redundancy reduction: $REDUNDANCY_ARG"
+echo "[INFO] Using visual_threshold: $VISUAL_THRESHOLD"
+echo "[INFO] Using logo_p:           $LOGO_P"
+echo "[INFO] Using w_face:           $W_FACE"
+echo "[INFO] Using w_emotion:        $W_EMOTION"
+echo "[INFO] Using w_pose:           $W_POSE"
+echo "[INFO] Using w_iqa:            $W_IQA"
+
 
 INFER_ROOT="data/inference_output"
 FRAMES_DIR="$INFER_ROOT/frames"
@@ -132,7 +153,13 @@ python src/inference/keyframe_selector.py \
     --output_csv "$KEYFRAME_CSV" \
     --output_dir "$KEYFRAME_DIR" \
     --video_id "$VIDEO_ID" \
-    --redundancy_reduction "$REDUNDANCY_ARG" 2>&1
+    --redundancy_reduction "$REDUNDANCY_ARG" \
+    --visual_threshold "$VISUAL_THRESHOLD" \
+    --logo_threshold "$LOGO_P" \
+    --w_face "$W_FACE" \
+    --w_emotion "$W_EMOTION" \
+    --w_pose "$W_POSE" \
+    --w_iqa "$W_IQA" 2>&1
 
 if [ $? -ne 0 ]; then echo "[ERROR] Keyframe selection failed"; exit 1; fi
 echo "[STEP 4] Done in $((SECONDS - T4))s"

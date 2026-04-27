@@ -89,7 +89,9 @@ def cleanup_data_folder():
     print("[Cleanup] Output directories recreated — ready for new run.")
 
 
-def run_inference(model, video_path, fps=5, redundancy_reduction=True):
+#def run_inference(model, video_path, fps=5, redundancy_reduction=True):
+def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_threshold=0.90, w_face=0.25, w_emotion=0.15, w_pose=0.15, w_iqa=0.35, logo_p=0.50):
+
     """Run inference pipeline and emit progress updates"""
     global current_status
     
@@ -103,14 +105,25 @@ def run_inference(model, video_path, fps=5, redundancy_reduction=True):
         # Debug output
         print(f"Running: {bash_executable} {SCRIPT_PATH} --model {model} --video {video_path}")
         print(f"Working directory: {BASE_DIR}")
-        print(f"fps={fps}  redundancy_reduction={redundancy_reduction}")
+        print(
+            f"fps={fps}  redundancy_reduction={redundancy_reduction}  "
+            f"visual_threshold={visual_threshold}  logo_p={logo_p}  "
+            f"w_face={w_face}  w_emotion={w_emotion}  w_pose={w_pose}  w_iqa={w_iqa}"
+        )
 
         cmd = [
             bash_executable, SCRIPT_PATH,
             "--model", model,
             "--video", video_path,
-            "--fps",   str(fps),
+            "--fps", str(fps),
+            "--visual_threshold", str(visual_threshold),
+            "--logo_p", str(logo_p),
+            "--w_face", str(w_face),
+            "--w_emotion", str(w_emotion),
+            "--w_pose", str(w_pose),
+            "--w_iqa", str(w_iqa),
         ]
+
         if not redundancy_reduction:
             cmd.append("--no_redundancy")
 
@@ -230,13 +243,40 @@ def index():
             video_path = os.path.join(upload_dir, filename)
             video_file.save(video_path)
 
-            fps = int(request.form.get('fps', 5))
+            fps = int(request.form.get('fps', 12))
             fps = max(1, min(24, fps))
             redundancy_reduction = request.form.get('redundancy_reduction') == '1'
 
+            visual_threshold = float(request.form.get('visual_threshold', 0.90))
+            visual_threshold = max(0.0, min(1.0, visual_threshold))
+
+            logo_p = float(request.form.get('logo_p', 0.50))
+            logo_p = max(0.0, min(1.0, logo_p))
+
+            w_face = float(request.form.get('w_face', 0.25))
+            w_emotion = float(request.form.get('w_emotion', 0.15))
+            w_pose = float(request.form.get('w_pose', 0.15))
+            w_iqa = float(request.form.get('w_iqa', 0.35))
+
+            # optional: prevent all-zero weights
+            if (w_face + w_emotion + w_pose + w_iqa) <= 0:
+                w_face, w_emotion, w_pose, w_iqa = 0.25, 0.15, 0.15, 0.35
+
+
             thread = threading.Thread(
                 target=run_inference,
-                args=(model, video_path, fps, redundancy_reduction)
+                args=(
+                    model,
+                    video_path,
+                    fps,
+                    redundancy_reduction,
+                    visual_threshold,
+                    w_face,
+                    w_emotion,
+                    w_pose,
+                    w_iqa,
+                    logo_p,
+                )
             )
             thread.daemon = True
             thread.start()
