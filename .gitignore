@@ -19,3 +19,14 @@ inference_outputs/
 #*.pt
 models_history/
 oldmodels/
+
+# ANOVA results
+anova_user_study.py
+anova_results_mapped
+
+# GPU/CPU logs and file for plotting
+plot_gpu.py
+gpu_cpu_logs
+
+videos (1).xlsx
+Thumbnail Selection for Soccer Highlight Clips.xlsx

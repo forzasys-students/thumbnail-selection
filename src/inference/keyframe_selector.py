@@ -876,10 +876,10 @@ def select_keyframes(
     analytics["timing"]["save_sec"] += (time.time() - t_save)
 
 
-    if CLUSTER_DEBUG_DATA:
-        df_clusters = pd.DataFrame(CLUSTER_DEBUG_DATA)
-        df_clusters.to_csv("cluster_debug.csv", index=False)
-        print(f"[DEBUG] Saved cluster_debug.csv with {len(df_clusters)} rows")
+    #if CLUSTER_DEBUG_DATA:
+    #    df_clusters = pd.DataFrame(CLUSTER_DEBUG_DATA)
+    #    df_clusters.to_csv("cluster_debug.csv", index=False)
+    #    print(f"[DEBUG] Saved cluster_debug.csv with {len(df_clusters)} rows")
 
     # -----------------------------------------------------------------------------
     # Print analytics summary

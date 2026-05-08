@@ -11,6 +11,7 @@ import time
 import requests
 from datetime import datetime, timedelta
 import shutil  
+import psutil  
 
 # Add near the top with other config
 API = "https://api.fotbollplay.se/allsvenskan/event"
@@ -89,6 +90,38 @@ def cleanup_data_folder():
     print("[Cleanup] Output directories recreated — ready for new run.")
 
 
+def _log_gpu_cpu(pid, gpu_path, cpu_path, stop_event):
+    with open(gpu_path, "w") as gf, open(cpu_path, "w") as cf:
+        gf.write("utilization.gpu [%], memory.used [MiB]\n")
+        cf.write("cpu_pct, rss_mib\n")
+
+        # Prime the system-level cpu_percent sampler (first call always returns 0.0)
+        psutil.cpu_percent(interval=None)
+
+        while not stop_event.is_set():
+            # GPU
+            try:
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used",
+                     "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True
+                )
+                gf.write(result.stdout.strip().replace(" ", "") + "\n")
+                gf.flush()
+            except Exception:
+                gf.write("0,0\n"); gf.flush()
+
+            # CPU — system-wide, no process tree needed
+            cpu = psutil.cpu_percent(interval=None)   # % across all cores, 0-100
+            ram = psutil.virtual_memory().used / (1024 * 1024)  # system RAM in MiB
+            cf.write(f"{cpu:.1f}, {ram:.1f}\n")
+            cf.flush()
+
+            time.sleep(1)
+
+
+
+
 #def run_inference(model, video_path, fps=5, redundancy_reduction=True):
 def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_threshold=0.90, w_face=0.25, w_emotion=0.15, w_pose=0.15, w_iqa=0.35, logo_p=0.50):
 
@@ -139,6 +172,26 @@ def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_t
             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
         )
         
+
+        # ── ADD THIS BLOCK (after Popen, before the for-loop) ──────────
+        log_dir = os.path.join(BASE_DIR, "gpu_cpu_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        rr_tag = "wRR" if redundancy_reduction else "nRR"
+        run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_id = f"{rr_tag}_{run_ts}"
+        stop_event = threading.Event()
+        log_thread = threading.Thread(
+            target=_log_gpu_cpu,
+            args=(
+                process.pid,
+                os.path.join(log_dir, f"gpu_log_{run_id}.csv"),
+                os.path.join(log_dir, f"cpu_log_{run_id}.csv"),
+                stop_event,
+            ),
+            daemon=True
+        )
+        log_thread.start()
+
         stage_progress = {
             "[STEP 1]": 25,
             "[STEP 2]": 50,
@@ -182,6 +235,9 @@ def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_t
                     progress_queue.put(current_status.copy())
         
         process.wait()
+
+        stop_event.set()
+        log_thread.join(timeout=3)
         
         if process.returncode == 0:
             current_status = {
