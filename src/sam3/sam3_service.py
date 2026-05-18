@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 sam3_model = None
 sam3_processor = None
 
+# Paths
+SAM3_SERVICE_DIR = Path(__file__).resolve().parent
+BPE_PATH = SAM3_SERVICE_DIR / "assets" / "bpe_simple_vocab_16e6.txt.gz"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,11 +52,18 @@ async def lifespan(app: FastAPI):
     try:
         # Load SAM3 model once at startup
         logger.info("Loading SAM3 model from HuggingFace...")
+
+        if not BPE_PATH.exists():
+            raise FileNotFoundError(f"SAM3 BPE tokenizer file not found: {BPE_PATH}")
+
+        logger.info(f"Using SAM3 BPE tokenizer: {BPE_PATH}")
+
         sam3_model = build_sam3_image_model(
             device="cuda" if torch.cuda.is_available() else "cpu",
             load_from_HF=True,
             enable_segmentation=True,
-            enable_inst_interactivity=True
+            enable_inst_interactivity=True,
+            bpe_path=str(BPE_PATH)
         )
         
         # Create processor
@@ -71,9 +82,8 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to load SAM3 model: {e}")
         raise
     
-    yield  # Service runs
+    yield
     
-    # Cleanup on shutdown
     logger.info("Shutting down SAM3 service...")
     sam3_model = None
     sam3_processor = None

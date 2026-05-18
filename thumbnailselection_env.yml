@@ -50,7 +50,6 @@ dependencies:
       - cfgv==3.5.0
       - charset-normalizer==3.4.4
       - click==8.3.3
-      - clip==1.0
       - colorama==0.4.6
       - coloredlogs==15.0.1
       - comm==0.2.3
@@ -236,10 +235,10 @@ dependencies:
       - timm==0.9.12
       - tinycss2==1.4.0
       - tokenizers==0.15.2
-      - torch==2.5.1+cu121
-      - torchaudio==2.5.1+cu121
-      - torchmetrics==1.8.2
-      - torchvision==0.20.1+cu121
+      #- torch==2.5.1+cu121
+      #- torchaudio==2.5.1+cu121
+      #- torchmetrics==1.8.2
+      #- torchvision==0.20.1+cu121
       - tornado==6.5.2
       - tqdm==4.67.1
       - traitlets==5.14.3
