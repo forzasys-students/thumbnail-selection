@@ -7,7 +7,7 @@ Thumbnail selection is an important part of sports video presentation. It create
 
 ## Demo Video
 
-The video below demonstrates the graphical user interface and shows how the system processes a soccer goal clip, ranks thumbnail candidates, and allows refinement of the final thumbnail.
+Click the image below to watch a video that demonstrates the graphical user interface and shows how the system processes a soccer goal clip, ranks thumbnail candidates, and allows refinement of the final thumbnail
 
 [![AI-Based Thumbnail Generation Demo](https://img.youtube.com/vi/6L3BeG1f6Eo/maxresdefault.jpg)](https://www.youtube.com/watch?v=6L3BeG1f6Eo)
 
