@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, Response, jsonify, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, Response, jsonify, send_from_directory, send_file
 import os
 import subprocess
 import threading
@@ -12,6 +12,9 @@ import requests
 from datetime import datetime, timedelta
 import shutil  
 import psutil  
+import zipfile
+from io import BytesIO
+
 
 API = "https://api.fotbollplay.se/allsvenskan/event"
 
@@ -559,6 +562,25 @@ def serve_thumbnail_file(filename):
     """Serve generated thumbnail images."""
     return send_from_directory(THUMBNAILS_FOLDER, filename)
 
+
+@app.route('/download-all-keyframes')
+def download_all_keyframes():
+    memory_file = BytesIO()
+
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for filename in os.listdir(OUTPUT_FOLDER):
+            if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                file_path = os.path.join(OUTPUT_FOLDER, filename)
+                zf.write(file_path, arcname=filename)
+
+    memory_file.seek(0)
+
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name='keyframes.zip'
+    )
 
 
 @app.route('/api/fotbollplay/events')

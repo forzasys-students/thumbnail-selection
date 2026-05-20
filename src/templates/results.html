@@ -43,9 +43,7 @@
                     <button class="view-btn active" onclick="setView('grid')">Grid</button>
                     <button class="view-btn" onclick="setView('list')">List</button>
                 </div>
-                {% if keyframes %}
-                <button class="btn-secondary" onclick="downloadAll()">Download All</button>
-                {% endif %}
+                
                 <button class="btn-primary" onclick="window.location.href='{{ url_for('index') }}'">Process New Video</button>
             </div>
         </div>

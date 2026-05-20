@@ -730,6 +730,7 @@ class ThumbnailEditor {
         this.isDragging = false;
     }
 
+    /*
     // =========================================================================
     // Download
     // =========================================================================
@@ -765,6 +766,47 @@ class ThumbnailEditor {
             this.showError('Download failed: ' + e.message);
         }
     }
+
+        */
+
+    async downloadThumbnail() {
+        this.showStatus('Rendering…');
+
+        try {
+            // Hide selection box before export
+            const oldSelectedId = this.selectedId;
+            this.selectedId = null;
+            this._render();
+
+            const blob = await new Promise((resolve) => {
+                this.canvas.toBlob(resolve, 'image/png', 0.95);
+            });
+
+            // Restore selection after export
+            this.selectedId = oldSelectedId;
+            this._render();
+
+            if (!blob) {
+                throw new Error('Could not export canvas');
+            }
+
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `thumbnail_${Date.now()}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            URL.revokeObjectURL(url);
+
+            this.showStatus('Downloaded!');
+        } catch (e) {
+            this.showError('Download failed: ' + e.message);
+        }
+    }
+
 
     // =========================================================================
     // Events
