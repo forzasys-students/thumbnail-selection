@@ -1,7 +1,6 @@
 """
 Enhanced Thumbnail Compositor - Supports shapes, logos, multiple fonts
 
-NEW: Renders text, rectangles, logos with layer ordering
 """
 
 from __future__ import annotations

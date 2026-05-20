@@ -130,7 +130,7 @@ body {
 }
 
 /* ─────────────────────────────────────────
-   SECTION 01 — INPUT
+   SECTION 01 - INPUT
    ───────────────────────────────────────── */
 .input-row {
     display: grid;
@@ -324,7 +324,7 @@ select option {
 
 
 /* ─────────────────────────────────────────
-   SECTION 02 — SIGNAL WEIGHTS
+   SECTION 02 - SIGNAL WEIGHTS
    ───────────────────────────────────────── */
 .section-header-row {
     display: flex;

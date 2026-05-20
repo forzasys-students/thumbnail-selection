@@ -28,7 +28,7 @@ from PIL import Image
 
 CLUSTER_DEBUG_DATA = []
 
-# Global counter — incremented every time a cluster is formed so IDs are
+# Global counter - incremented every time a cluster is formed so IDs are
 # unique across all segments, all calls, and all clustering stages.
 _cluster_counter = 0
 
@@ -48,23 +48,12 @@ def reset_cluster_debug():
 
 
 # =============================================================================
-# CLIP EMBEDDER — loads once, reused across all segments
+# CLIP EMBEDDER - loads once, reused across all segments
 # =============================================================================
 class _CLIPEmbedder:
     """
     Lazy singleton wrapper around CLIP ViT-B/32.
 
-    Loading CLIP takes ~2s. This class ensures it loads exactly once
-    regardless of how many times visual_clustering is called.
-
-    Why CLIP instead of histograms:
-        Color histograms fail on soccer footage because every frame shares
-        nearly identical color distributions (green pitch, same jerseys).
-        Two completely different moments — a goalkeeper dive vs a player
-        celebrating — can easily hit 85%+ histogram similarity just because
-        they share the same background. CLIP encodes *what is happening*,
-        not just what colors are present, so semantically different frames
-        stay in different clusters.
     """
     _instance: Optional["_CLIPEmbedder"] = None
 
@@ -99,10 +88,10 @@ class _CLIPEmbedder:
     def embed_batch(self, paths: list, batch_size: int = 64) -> dict:
         """
         Encode all paths in one or more batched GPU passes.
-        Results are cached internally — repeated calls for the same path
+        Results are cached internally - repeated calls for the same path
         are instant dict lookups with no GPU work.
 
-        Returns {path: np.ndarray} — L2-normalised unit vectors.
+        Returns {path: np.ndarray} - L2-normalised unit vectors.
         Unreadable paths get a zero vector.
         """
         embeddings: dict = {}
@@ -147,14 +136,13 @@ class _CLIPEmbedder:
 
 
 # =============================================================================
-# AESTHETIC SCORER — runs on top of existing CLIP embeddings, zero extra cost
+# AESTHETIC SCORER - runs on top of existing CLIP embeddings, zero extra cost
 # =============================================================================
 
 class _AestheticScorer:
     """
-    LAION aesthetic predictor MLP. Runs on CLIP ViT-B/32 embeddings (512-dim).
+    LAION aesthetic predictor MLP. Runs on CLIP ViT-B/32 embeddings.
     Since embeddings are already computed for clustering, scoring is free.
-    Downloads ~4MB weights on first use, cached by torch.hub.
     """
     _instance: Optional["_AestheticScorer"] = None
 
@@ -176,7 +164,7 @@ class _AestheticScorer:
     def score(self, embeddings: dict) -> dict:
         """
         Score all embeddings in one GPU pass.
-        embeddings: {path -> np.ndarray (512,)} — already L2-normalised CLIP vectors
+        embeddings: {path -> np.ndarray (512,)} - already L2-normalised CLIP vectors
         Returns:    {path -> float} aesthetic score, normalised to [0, 1]
         """
         if not embeddings:
@@ -190,7 +178,7 @@ class _AestheticScorer:
         with torch.no_grad():
             raw = self.model(vecs).squeeze(-1).cpu().numpy()
 
-        # Raw scores are roughly in [1, 10] — normalise to [0, 1]
+        # Raw scores are roughly in [1, 10] - normalise to [0, 1]
         normalised = np.clip((raw - 1.0) / 9.0, 0.0, 1.0)
         return {p: float(s) for p, s in zip(paths, normalised)}
 
@@ -307,15 +295,13 @@ def visual_clustering(
     Group visually similar frames, keep top-K per cluster.
 
     method options:
-      "histogram" — fast, color-only. Fails on soccer footage where all frames
+      "histogram" - fast, color-only. Fails on soccer footage where all frames
                     share the same color distribution (pitch, jerseys).
-      "phash"     — structural similarity, robust to color shifts.
-      "clip"      — semantic embeddings via CLIP ViT-B/32. Understands *what is
+      "phash"     - structural similarity, robust to color shifts.
+      "clip"      - semantic embeddings via CLIP ViT-B/32. Understands *what is*
                     happening* in the frame, not just colors. Recommended for
                     soccer. Model loads once globally and is reused every call.
 
-    clip_device:     "cuda" or "cpu"
-    clip_batch_size: frames per GPU forward pass. Reduce to 32 if OOM.
     """
     if not candidates:
         return []
@@ -333,7 +319,7 @@ def visual_clustering(
         embedder = _CLIPEmbedder.get(device=clip_device)
         features = embedder.embed_batch(paths, batch_size=clip_batch_size)
 
-        # Score aesthetics from the same embeddings — no extra forward pass
+        # Score aesthetics from the same embeddings - no extra forward pass
         aesthetic_scores = _AestheticScorer.get(device=clip_device).score(features)
         for c in candidates:
             c["aesthetic_score"] = aesthetic_scores.get(c["path"], 0.0)
@@ -402,27 +388,15 @@ def temporal_clustering(
          frame in the cluster.
       3. From each cluster, keep the top_k highest-scoring frames.
 
-    This is the right complement to CLIP visual deduplication: CLIP catches
-    semantically similar frames wherever they sit in time; temporal clustering
-    catches temporally adjacent frames that CLIP let through because they look
-    slightly different (e.g., mid-action vs peak-action one frame apart).
-
-    Why cluster-then-select beats greedy-keep:
-      - Greedy-keep scores frames before grouping, so it can mis-order
-        candidates and leave gaps in coverage.
-      - Cluster-then-select first finds the natural temporal groups, then
-        applies scoring inside each group — the winner is always the best
-        frame that actually belongs to that moment.
-
     min_frame_gap reference (frame-index units, independent of extraction FPS):
-        6   — burst duplicates only (~0.25s at 24fps, ~0.5s at 12fps)
-        12  — tight window (~0.5s at 24fps, ~1s at 12fps)
-        24  — 1-second window at 24fps  /  2-second window at 12fps
-        48  — 2-second window at 24fps  /  4-second window at 12fps
+        6   - burst duplicates only (~0.25s at 24fps, ~0.5s at 12fps)
+        12  - tight window (~0.5s at 24fps, ~1s at 12fps)
+        24  - 1-second window at 24fps  /  2-second window at 12fps
+        48  - 2-second window at 24fps  /  4-second window at 12fps
 
     top_k:
-        1  — decisive: one winner per moment (recommended after heavy scoring)
-        2+ — keep alternatives per moment (useful before scoring is final)
+        1  - decisive: one winner per moment (recommended after heavy scoring)
+        2+ - keep alternatives per moment (useful before scoring is final)
     """
     if not candidates:
         return []
@@ -491,10 +465,10 @@ def hybrid_clustering(
     """
     Two-pass redundancy reduction:
 
-    Pass 1 — Visual (CLIP):
+    Pass 1 - Visual (CLIP):
         Remove semantically similar frames.
 
-    Pass 2 — Temporal:
+    Pass 2 - Temporal:
         Remove frames that are too close together in time.
         temporal_window = min_frame_gap: two survivors must be at least
         this many frame indices apart in the filename.
@@ -591,9 +565,9 @@ def reduce_redundancy(
 
 """
 METHOD:
-   "visual":   CLIP only — semantic deduplication. Use when you have no frame-
+   "visual":   CLIP only - semantic deduplication. Use when you have no frame-
                index signal or want CLIP to do all the work.
-   "temporal": Frame-index clustering only — groups temporally adjacent frames
+   "temporal": Frame-index clustering only - groups temporally adjacent frames
                and keeps the best. Use as a lightweight post-CLIP safety net
                or when CLIP is disabled.
    "hybrid":   CLIP first, then temporal. The recommended two-pass pipeline:
@@ -602,10 +576,10 @@ METHOD:
                to fall below the similarity threshold.
 
 VISUAL_METHOD (for "visual" and "hybrid"):
-   "histogram": Fast, but fails on soccer — all frames share the same color
+   "histogram": Fast, but fails on soccer - all frames share the same color
                 distribution (green pitch, same jerseys). Use only for testing.
    "phash":     Structural similarity, better than histogram, no GPU needed.
-   "clip":      Semantic embeddings — understands what is happening in the frame.
+   "clip":      Semantic embeddings - understands what is happening in the frame.
                 Recommended for soccer. Loads once, batched per temporal group.
 
 TEMPORAL_WINDOW / min_frame_gap reference (frame-index units, FPS-independent):
@@ -613,8 +587,8 @@ TEMPORAL_WINDOW / min_frame_gap reference (frame-index units, FPS-independent):
    indices 0012 and 0013 are always 1 frame apart regardless of whether you
    extracted at 6, 12, or 24fps.
 
-VISUAL_THRESHOLD for clip: 0.90–0.93 is a tight semantic match
-    that only groups near-identical frames. 0.80–0.85 is more aggressive and
+VISUAL_THRESHOLD for clip: 0.90-0.93 is a tight semantic match
+    that only groups near-identical frames. 0.80-0.85 is more aggressive and
     can group different moments that share some visual features (e.g., same
     player celebrating in the same part of the pitch, even if one is a mid-action
     frame and the other is a peak-action frame).

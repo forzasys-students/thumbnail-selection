@@ -321,13 +321,13 @@ class ThumbnailEditor {
     metaPanel.classList.remove('hidden');
 
     document.getElementById('te-meta-home').textContent =
-        m.home_team_short || m.home_team || '—';
+        m.home_team_short || m.home_team || '-';
 
     document.getElementById('te-meta-away').textContent =
-        m.visiting_team_short || m.visiting_team || '—';
+        m.visiting_team_short || m.visiting_team || '-';
 
     document.getElementById('te-meta-score').textContent =
-        m.score || '—';
+        m.score || '-';
 
     document.getElementById('te-meta-time').textContent =
         m.game_time ? `⏱ ${m.game_time}` : '';
@@ -446,7 +446,7 @@ class ThumbnailEditor {
             }
 
             if (colorful.length < 10) {
-                // Logo is mostly monochrome (e.g. black/white badge) — fall back to navy
+                // Logo is mostly monochrome (e.g. black/white badge) - fall back to navy
                 return '#0a1628';
             }
 
@@ -470,7 +470,7 @@ class ThumbnailEditor {
         }
     }
 
-    // ── Add both team logos (TV2 style — side by side at bottom) ──────────────
+    // ── Add both team logos (TV2 style - side by side at bottom) ──────────────
     async addTeamLogos() {
         await this._ensureMetadataLoaded();
 
@@ -493,7 +493,7 @@ class ThumbnailEditor {
         const BOTTOM_Y  = h - PAD - LOGO_SIZE;
         // ───────────────────────────────────────────────────────────────────
 
-        // Home team — bottom-left: navy backing rect + logo on top
+        // Home team - bottom-left: navy backing rect + logo on top
         if (home_team_logo) {
             this.addRect(PAD, BOTTOM_Y, {
                 width: LOGO_SIZE + 30, height: LOGO_SIZE + 30,
@@ -508,7 +508,7 @@ class ThumbnailEditor {
             });
         }
 
-        // Away team — bottom-right: navy backing rect + logo on top
+        // Away team - bottom-right: navy backing rect + logo on top
         if (visiting_team_logo) {
             const awayX = w - PAD - (LOGO_SIZE + 30);
             this.addRect(awayX, BOTTOM_Y, {
@@ -527,7 +527,7 @@ class ThumbnailEditor {
         this.showStatus('✓ Team logos added');
     }
 
-    // ── Add score (TV2 style — large numbers beside each logo, bottom) ─────────
+    // ── Add score (TV2 style - large numbers beside each logo, bottom) ─────────
     async addScore() {
         await this._ensureMetadataLoaded();
 
@@ -577,7 +577,7 @@ class ThumbnailEditor {
             } catch { /* keep default */ }
         }
 
-        // Home score — immediately right of home logo box
+        // Home score - immediately right of home logo box
         const homeScoreX = PAD + (LOGO_SIZE + 30);
         this.addRect(homeScoreX, BOTTOM_Y, {
             width: SCORE_RW + 30, height: LOGO_SIZE + 30,
@@ -605,7 +605,7 @@ class ThumbnailEditor {
             }
         );
 
-        // Away score — immediately left of away logo box
+        // Away score - immediately left of away logo box
         const awayLogoX  = w - PAD - (LOGO_SIZE + 30);
         const awayScoreX = awayLogoX - (SCORE_RW + 30);
         this.addRect(awayScoreX, BOTTOM_Y, {
@@ -872,7 +872,6 @@ function teAddScore() {
     window._editor.addScore();
 }
 
-// ... continue in next message with modal HTML and element list UI
 
 // =============================================================================
 // Modal HTML with enhanced controls
@@ -919,9 +918,9 @@ function _buildModal() {
           <div id="te-meta-panel" class="meta-panel hidden">
             <div class="meta-panel-inner">
               <div class="meta-match">
-                <span id="te-meta-home" class="meta-team">—</span>
-                <span id="te-meta-score" class="meta-score-badge">— : —</span>
-                <span id="te-meta-away" class="meta-team">—</span>
+                <span id="te-meta-home" class="meta-team">-</span>
+                <span id="te-meta-score" class="meta-score-badge">- : -</span>
+                <span id="te-meta-away" class="meta-team">-</span>
               </div>
               <div class="meta-detail">
                 <span id="te-meta-time"></span>
@@ -1005,7 +1004,7 @@ function _wireControls(editor) {
     const elList = document.getElementById('te-elements');
     if (elList) elList.innerHTML = '<p class="empty-text-list">No elements yet</p>';
 
-    //  Metadata UI — always same initial state
+    //  Metadata UI - always same initial state
     const metaButtons = document.getElementById('te-meta-buttons');
     const metaPanel   = document.getElementById('te-meta-panel');
 

@@ -13,7 +13,7 @@ import torch
 import pandas as pd
 from PIL import Image
 from torchvision import transforms
-from src.training.train import get_model  # already supports multiple models
+from src.training.train import get_model  
 
 LABELS = [
     "Close-up_behind_the_goal",

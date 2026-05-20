@@ -143,7 +143,7 @@ def select_keyframes(
     w_iqa: float = 0.35,
 ):
     """
-    This is the main selection stage (STEP 4 in the pipeline).
+    This is the main selection stage (STEP 4-11 in the pipeline).
 
     It expects:
     - pred_csv: per-frame classifier output (frame_path, predicted label, confidence, etc.)
@@ -247,7 +247,7 @@ def select_keyframes(
     print(f"{'='*60}\n")
 
     # =============================================================================
-    # PRE-COMPUTATION — scoped to segment frames only
+    # PRE-COMPUTATION - scoped to segment frames only
     # =============================================================================
 
     # --- Build a mask of only frames that fall within a segment range ---
@@ -380,7 +380,7 @@ def select_keyframes(
             #metrics = compute_frame_metrics(path)
             metrics = metrics_cache.get(path)
             if metrics is None:
-                continue  # not in cache means unreadable or below conf gate — skip
+                continue  # not in cache means unreadable or below conf gate - skip
 
             if metrics is None:
                 continue  # unreadable image — skip silently
@@ -826,7 +826,7 @@ def select_keyframes(
 
         results.append({
             # --- identity / ranking ---
-            "video_id": video_id,                                       # Forzasys video asset ID — used by metadata API to match event
+            "video_id": video_id,                                       # Forzasys video asset ID - used by metadata API to match event
             "rank": rank + 1,                                           # Final rank after all selection stages
             "segment_id": c["segment_id"],                              # Temporal segment ID this frame was selected from
             "segment_priority": pr,                                     # Semantic segment class (P1 player/referee, P2 corner, P3 staff, P4 behind goal)
@@ -962,7 +962,7 @@ if __name__ == "__main__":
     parser.add_argument("--yolo_pose_path", type=str, default="models/yolo/yolo26m-pose.pt")
     parser.add_argument("--debug", action="store_true", help="Verbose stage prints inside segments")
     parser.add_argument("--video_id", type=str, default="unknown",
-                        help="Forzasys video asset ID — embedded in output filenames and keyframes.csv")
+                        help="Forzasys video asset ID - embedded in output filenames and keyframes.csv")
     parser.add_argument("--redundancy_reduction", type=str, default="true",
                         help="Enable redundancy reduction: 'true' or 'false' (default: true)")
     parser.add_argument("--visual_threshold", type=float, default=0.85)

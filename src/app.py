@@ -13,15 +13,12 @@ from datetime import datetime, timedelta
 import shutil  
 import psutil  
 
-# Add near the top with other config
 API = "https://api.fotbollplay.se/allsvenskan/event"
 
-# video_asset_id → event index (built once, refreshed every INDEX_TTL seconds)
 VIDEO_INDEX: dict = {}
 INDEX_LAST_UPDATED: float | None = None
 INDEX_TTL = 300  # seconds (5 min)
 
-# Keep legacy cache dict for the proxy endpoint
 METADATA_CACHE = {}
 CACHE_DURATION = 300
 
@@ -69,7 +66,6 @@ def cleanup_data_folder():
     data_dir      = os.path.join(BASE_DIR, "data")
     inference_dir = os.path.join(data_dir, "inference_output")
 
-    # 1. Remove old uploaded video files from data/ (files only, not subdirs)
     if os.path.isdir(data_dir):
         for entry in os.scandir(data_dir):
             if entry.is_file():
@@ -79,15 +75,13 @@ def cleanup_data_folder():
                 except Exception as exc:
                     print(f"[Cleanup] Could not remove {entry.name}: {exc}")
 
-    # 2. Remove the entire inference_output tree
     if os.path.isdir(inference_dir):
         shutil.rmtree(inference_dir, ignore_errors=True)
         print("[Cleanup] Removed inference_output/")
 
-    # 3. Recreate the dirs that Flask expects to exist straight away
     os.makedirs(MASKS_FOLDER,      exist_ok=True)
     os.makedirs(THUMBNAILS_FOLDER, exist_ok=True)
-    print("[Cleanup] Output directories recreated — ready for new run.")
+    print("[Cleanup] Output directories recreated - ready for new run.")
 
 
 def _log_gpu_cpu(pid, gpu_path, cpu_path, stop_event):
@@ -111,7 +105,7 @@ def _log_gpu_cpu(pid, gpu_path, cpu_path, stop_event):
             except Exception:
                 gf.write("0,0\n"); gf.flush()
 
-            # CPU — system-wide, no process tree needed
+            # CPU - system-wide, no process tree needed
             cpu = psutil.cpu_percent(interval=None)   # % across all cores, 0-100
             ram = psutil.virtual_memory().used / (1024 * 1024)  # system RAM in MiB
             cf.write(f"{cpu:.1f}, {ram:.1f}\n")
@@ -132,7 +126,6 @@ def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_t
         current_status = {"stage": "Starting", "progress": 0, "message": "Initializing pipeline..."}
         progress_queue.put(current_status.copy())
         
-        # Use Git Bash on Windows
         bash_executable = r"C:\Program Files\Git\bin\bash.exe"
         
         # Debug output
@@ -160,7 +153,6 @@ def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_t
         if not redundancy_reduction:
             cmd.append("--no_redundancy")
 
-        # Start the subprocess with UTF-8 encoding
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -172,8 +164,6 @@ def run_inference(model, video_path, fps=12, redundancy_reduction=True, visual_t
             env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}
         )
         
-
-        # ── ADD THIS BLOCK (after Popen, before the for-loop) ──────────
         log_dir = os.path.join(BASE_DIR, "gpu_cpu_logs")
         os.makedirs(log_dir, exist_ok=True)
         rr_tag = "wRR" if redundancy_reduction else "nRR"
@@ -293,7 +283,7 @@ def index():
                     break
 
             # Clean previous run's files
-            print(f"[Upload] New video received: {filename} — cleaning previous data...")
+            print(f"[Upload] New video received: {filename} - cleaning previous data...")
             cleanup_data_folder()
 
             video_path = os.path.join(upload_dir, filename)
@@ -536,7 +526,7 @@ def create_thumbnail_route():
         output_filename = f"{base_name}_thumbnail_{timestamp}.png"
         output_path     = os.path.join(THUMBNAILS_FOLDER, output_filename)
 
-        # Compose thumbnail — pass new params through
+        # Compose thumbnail - pass new params through
         compose_thumbnail(
             image_path       = keyframe_path,
             mask_path        = mask_path,
@@ -754,7 +744,7 @@ def _fetch_goal_events_for_range(from_date: str, to_date: str, label: str) -> li
 
         offset += page_size
 
-    print(f"[Index:{label}] Done — {len(events)} events.")
+    print(f"[Index:{label}] Done - {len(events)} events.")
     return events
 
 

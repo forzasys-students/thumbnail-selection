@@ -7,7 +7,7 @@ from collections import defaultdict
 RAW_ROOT = "../../../data/frames"                 # input
 OUT_ROOT = "../../../data/balanced_dataset"       # output
 
-NOISE_BUFFER = 1.15  # Expect to remove ~10% as noise (adjust based on your data)
+NOISE_BUFFER = 1.15  # Expect to remove ~10% as noise 
 TARGET_PER_CLASS = int(1250 * NOISE_BUFFER) 
 
 # Deduplication settings

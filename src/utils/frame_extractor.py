@@ -200,7 +200,7 @@ def extract_frames_from_clip(
 
     cap.release()
 
-    # Write all frames in parallel — cv2.imwrite releases the GIL
+    # Write all frames in parallel - cv2.imwrite releases the GIL
     with ThreadPoolExecutor(max_workers=8) as pool:
         pool.map(_write_frame, write_queue)
 

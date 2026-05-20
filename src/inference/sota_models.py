@@ -415,32 +415,32 @@ class SOTAModels:
 
         The score captures four independent cues:
 
-        1. **Landmark completeness** – what fraction of the 5 kps fall inside
+        1. **Landmark completeness** - what fraction of the 5 kps fall inside
            the predicted bounding box.  A teammate covering part of the face
            will push one or more kps outside or to the edge of the bbox.
 
-        2. **Eye separation** – the horizontal distance between the two eyes,
+        2. **Eye separation** - the horizontal distance between the two eyes,
            normalised by face width.  An occluded or turned face shows eyes
            closer together or one eye missing from its expected position.
 
-        3. **Vertical landmark ordering** – eyes should sit above the nose,
+        3. **Vertical landmark ordering** - eyes should sit above the nose,
            which should sit above the mouth.  Occlusion often breaks this
            geometric order (e.g. a jersey sleeve across the lower face pushes
            mouth kps upward).
 
-        4. **Landmark spread** – standard deviation of all 5 kps normalised
+        4. **Landmark spread** - standard deviation of all 5 kps normalised
            into the bbox coordinate system.  A clear face has landmarks spread
-           across both axes (~0.25–0.35 std).  Heavy occlusion collapses them
+           across both axes (~0.25-0.35 std).  Heavy occlusion collapses them
            toward one region.
 
         Returns
         -------
-        float in [0, 1]  –  1.0 = fully visible,  0.0 = heavily occluded.
+        float in [0, 1]  -  1.0 = fully visible,  0.0 = heavily occluded.
         0.5 is returned when landmarks are unavailable (neutral fallback).
         """
         kps = getattr(face, "kps", None)
         if kps is None or len(kps) < 5:
-            return 0.5  # no landmark data – neutral
+            return 0.5  # no landmark data - neutral
 
         kps = np.array(kps, dtype=float)  # shape (5, 2)
 
@@ -525,7 +525,7 @@ class SOTAModels:
                score = 0.60 * area_score + 0.40 * center_score
            (mirrors _select_dominant_person for pose consistency)
         2. Discard any face whose pixel area is below `min_coverage`
-           of the image area — these are background players too small
+           of the image area - these are background players too small
            to contribute meaningful quality signal.
         3. After picking the highest-scoring face as the primary, keep
            every other face whose area is at least `secondary_ratio`
@@ -573,7 +573,7 @@ class SOTAModels:
             scored.append((sel_score, area_px, i))
 
         if not scored:
-            # All faces too small — fall back to the largest detected face
+            # All faces too small - fall back to the largest detected face
             fallback = max(
                 range(len(faces)),
                 key=lambda i: (
@@ -610,16 +610,16 @@ class SOTAModels:
 
         Returns
         -------
-        area_coverage : float  – face area / image area
-        quality       : float  – composite quality score [0..1]
-        det_score     : float  – detection confidence [0..1]
-        visibility    : float  – occlusion score [0..1]  (included in quality)
-        area_px       : float  – raw pixel area (used as aggregation weight)
+        area_coverage : float  - face area / image area
+        quality       : float  - composite quality score [0..1]
+        det_score     : float  - detection confidence [0..1]
+        visibility    : float  - occlusion score [0..1]  (included in quality)
+        area_px       : float  - raw pixel area (used as aggregation weight)
 
         Quality composite weights sum to 1.0:
             size(0.25) + pos(0.15) + det(0.20) + sharp(0.20) + visibility(0.20)
 
-        Visibility is included here and nowhere else — Stage 5 uses
+        Visibility is included here and nowhere else - Stage 5 uses
         face_quality directly with no further visibility multiplier.
 
         Sharpness cap is 400 (raised from 150).  Broadcast close-ups
@@ -659,7 +659,7 @@ class SOTAModels:
         else:
             sharp_norm = 0.0
 
-        # VISIBILITY — included in quality composite (single place, no duplication)
+        # VISIBILITY - included in quality composite (single place, no duplication)
         visibility = self.face_occlusion_score(f, w, h)
 
         quality = (
@@ -674,7 +674,7 @@ class SOTAModels:
 
     def face_quality(self, path: str) -> Tuple[int, float, float, float, float, List, Optional[np.ndarray]]:
         """
-        Multi-face quality assessment — aggregates over all dominant faces.
+        Multi-face quality assessment - aggregates over all dominant faces.
 
         A celebration frame with 4 players raising their arms should score
         higher than a frame with a single partially-occluded face.
@@ -693,25 +693,15 @@ class SOTAModels:
         face_visibility : area-weighted mean.
                        Occlusion of each subject weighted by how prominent it is.
 
-        FIX – primary face selection (from previous fix, now generalised to N):
-            Previously each metric was independently maximised across all
-            faces so face_q, face_area, face_det and face_visibility could
-            come from four different faces.
-
-        FIX – visibility excluded from quality composite:
-            Was baked into quality (0.20 weight) AND applied again as
-            visibility_mod in Stage 5, causing double penalisation.
-
-        FIX – sharpness cap raised 150 → 400.
 
         Returns
         -------
-        num_faces    : int   – total detected faces (all, including background)
-        face_area    : float – summed dominant-face coverage, capped at 1.0
-        face_quality : float – area-weighted mean quality score [0..1]
-        face_det     : float – minimum detection confidence across dominant faces
-        face_vis     : float – area-weighted mean visibility score [0..1]
-        detected_faces : List  – all raw InsightFace face objects
+        num_faces    : int   - total detected faces (all, including background)
+        face_area    : float - summed dominant-face coverage, capped at 1.0
+        face_quality : float - area-weighted mean quality score [0..1]
+        face_det     : float - minimum detection confidence across dominant faces
+        face_vis     : float - area-weighted mean visibility score [0..1]
+        detected_faces : List  - all raw InsightFace face objects
         img            : np.ndarray | None
         """
         img = cv2.imread(path)
@@ -756,7 +746,7 @@ class SOTAModels:
             sum(q * w_ for q, w_ in zip(qualities, area_weights)) / total_weight
         )
 
-        # face_det: minimum — only as reliable as the weakest detection
+        # face_det: minimum - only as reliable as the weakest detection
         agg_det = float(min(det_scores))
 
         # face_visibility: area-weighted mean

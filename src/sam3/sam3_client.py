@@ -2,7 +2,6 @@
 Flask Client for SAM3 Service
 Functions to call SAM3 microservice from Flask (SoccerNet env)
 
-Add these functions to your app.py in SoccerNet311_y26 environment.
 """
 
 import requests

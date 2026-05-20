@@ -7,7 +7,7 @@ and computes detailed evaluation metrics:
 - Precision, Recall, F1-score (per-class and macro)
 - Overall accuracy
 - Confusion Matrix
-- Average inference speed (ms per frame) — measured correctly using CUDA events
+- Average inference speed (ms per frame) - measured correctly using CUDA events
 - Precision-Recall and F1-Recall curves
 
 Inference time methodology:
@@ -319,7 +319,7 @@ def main():
                 xticklabels=dataset.classes, yticklabels=dataset.classes)
     plt.xlabel("Predicted Label")
     plt.ylabel("True Label")
-    plt.title(f"Confusion Matrix — {args.model_name.upper()}")
+    plt.title(f"Confusion Matrix - {args.model_name.upper()}")
     plt.tight_layout()
     cm_path = os.path.join(CONF_MATRIX_DIR, f"confusion_matrix_{args.model_name}.png")
     plt.savefig(cm_path, dpi=150)
@@ -350,7 +350,7 @@ def main():
     axes[1].legend(fontsize=7)
     axes[1].grid(True)
 
-    fig.suptitle(f"{args.model_name.upper()} — Precision-Recall & F1 Curves", fontsize=12)
+    fig.suptitle(f"{args.model_name.upper()} - Precision-Recall & F1 Curves", fontsize=12)
     plt.tight_layout()
     curve_path = os.path.join(GRAPH_DIR, f"f1_precision_recall_{args.model_name}.png")
     plt.savefig(curve_path, dpi=150)

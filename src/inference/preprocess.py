@@ -1,5 +1,3 @@
-# preprocess.py
-
 """
 
 Preprocessing stages for video frame selection. 
