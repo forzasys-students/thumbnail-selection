@@ -5,6 +5,12 @@
 
 Thumbnail selection is an important part of sports video presentation. It creates the first impression of a video, and often decides whether a viewer clicks on the video or scrolls past it. Manual thumbnail selection can give good results, but it is slow and subjective, also difficult to scale when dealing with many clips that needs to be published quickly. Existing automatic methods still struggle with this because thumbnail quality depends on more than just choosing a clear or central frame. A good soccer thumbnail also needs to reflect the event, show the right camera perspective, and capture details such as emotion, player focus, and image quality. This thesis presents an AI-based pipeline for automatic thumbnail selection in soccer goal clips. The system extracts frames from a clip, classifies the camera shot-type, prioritizes close-up segments, removes low-quality and redundant frames, filters out frames containing broadcast logos and overlays, and ranks the remaining frames using several visual signals. These signals include face detection, facial emotion, pose estimation, and image quality assessment. The system is evaluated through various experiments on the individual components, cross-league testing of the camera shot-type classifier, runtime and resource usage analysis, and a user study comparing different thumbnail selection strategies. The results show that the pipeline can produce useful thumbnail candidates and reduce the amount of manual searching needed from an editor. The strongest results are achieved when AI-selected candidates are combined with human refinement and graphical overlays. This suggests that the most practical solution is a human-in-the-loop workflow, where AI handles fast candidate generation and editors keep control over the final thumbnail.
 
+## Demo Video
+
+The video below demonstrates the graphical user interface and shows how the system processes a soccer goal clip, ranks thumbnail candidates, and allows refinement of the final thumbnail.
+
+[![AI-Based Thumbnail Generation Demo](https://img.youtube.com/vi/6L3BeG1f6Eo/maxresdefault.jpg)](https://www.youtube.com/watch?v=6L3BeG1f6Eo)
+
 
 # Project Setup
 
