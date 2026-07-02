@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this repository, please cite both the software repository and the associated paper."
+message: "If you use this repository, please cite it using the metadata from this file."
 type: software
 
 title: "AI-Based Thumbnail Generation for Soccer Clips using Multi-Signal Analysis"
@@ -15,12 +15,10 @@ authors:
     given-names: "Pål"
 
 year: 2026
-date-released: "2026-07-02"
-
 repository-code: "https://github.com/forzasys-students/thumbnail-selection"
 url: "https://github.com/forzasys-students/thumbnail-selection"
 
-abstract: "This repository contains the implementation for AI-based thumbnail generation for soccer clips using multi-signal analysis, combining visual, audio, and content-based cues for sports video analysis and thumbnail selection."
+abstract: "This repository contains the implementation for AI-based thumbnail generation for soccer clips using multi-signal analysis."
 
 keywords:
   - Thumbnail generation
@@ -37,24 +35,3 @@ keywords:
   - AI-generated thumbnails
 
 license: "NOASSERTION"
-
-preferred-citation:
-  type: conference-paper
-  title: "AI-Based Thumbnail Generation for Soccer Clips using Multi-Signal Analysis"
-  authors:
-    - family-names: "Azam"
-      given-names: "Aliaan Nadeem"
-    - family-names: "Sarkhoosh"
-      given-names: "Mehdi Houshmand"
-    - family-names: "Midoglu"
-      given-names: "Cise"
-    - family-names: "Halvorsen"
-      given-names: "Pål"
-  year: 2026
-  conference:
-    name: "2026 IEEE International Conference on Content-Based Multimedia Indexing"
-    acronym: "CBMI 2026"
-    location: "Toulouse, France"
-    start: "2026-10-21"
-    end: "2026-10-23"
-  notes: "Submitted to the 2026 IEEE International Conference on Content-Based Multimedia Indexing (CBMI), Toulouse, France, 21--23 October 2026."
